@@ -287,16 +287,26 @@ func (m *Manager) bindFloatUplink(link netlink.Link, ip, gw net.IP) error {
 
 	m.floatMu.Lock()
 	defer m.floatMu.Unlock()
+
+	// Before the slot check, not after it: ext_links is keyed per ADDRESS and the
+	// slot below is per node, so two addresses reaching the node through the same
+	// gateway on the same link produce an identical binding. Gating this on the
+	// slot meant only the first of them ever got a host key, and the rest fell
+	// back to the default uplink — the failure the host key exists to prevent.
+	if err := m.setExtLink(idx, ip, subnet, nh); err != nil {
+		return err
+	}
+
 	if !floatNeedsProgram(m.floatBound, want) {
-		return nil // already configured this run
+		return nil // the node-wide slot is already what we want
 	}
 	if floatContends(m.floatBound, want) {
 		// One slot: the loser keeps from_uplink attached and the two flip on
 		// every resync.
-		// Not a correctness problem any more: each link has its own ext_links
-		// entry, so v4 egress is right for both. Still worth seeing, because the
-		// node-wide cell it moves is what v6 egress still follows.
-		slog.Default().Info("floating uplink re-bound; the node-wide cell now follows the newer link (v6 egress only)",
+		// v4 egress is unaffected now — each address has its own ext_links entry
+		// — but the node-wide cell still moves, and v6 egress and the DSR
+		// fallback still follow it, so this remains a correctness signal.
+		slog.Default().Warn("floating uplink re-bound; the node-wide cell now follows the newer link (v6 egress and DSR)",
 			"from_ifindex", m.floatBound.ifindex, "to_ifindex", idx,
 			"from_nh", m.floatBound.nh, "to_nh", want.nh,
 			"from_base", m.floatBound.base, "to_base", want.base, "link", link.Attrs().Name)
@@ -327,13 +337,6 @@ func (m *Manager) bindFloatUplink(link netlink.Link, ip, gw net.IP) error {
 	fn := overlayFloatNet{Base: want.base, Mask: want.mask}
 	if err := m.objs.FloatNet.Put(uint32(0), &fn); err != nil {
 		return fmt.Errorf("set floating subnet: %w", err)
-	}
-	// The cells above are the node-wide answer and nothing reads them any more
-	// (docs/lb-ingress.md). This is the one that decides egress: an entry per
-	// link, so two links carrying external addresses no longer overwrite each
-	// other's answer.
-	if err := m.setExtLink(idx, ip, subnet, nh); err != nil {
-		return err
 	}
 	m.floatBound = want
 	return nil
@@ -494,9 +497,15 @@ func (m *Manager) setExtLink(idx int, ip net.IP, subnet *net.IPNet, nh net.IP) e
 	if err != nil {
 		return err
 	}
-	for _, k := range keys {
+	for i, k := range keys {
+		what := ip.String()
+		if i > 0 {
+			what = subnet.String()
+		}
 		if err := m.objs.ExtLinks.Put(&k, &val); err != nil {
-			return fmt.Errorf("set ext link %s: %w", subnet, err)
+			// Out of room here means the address silently egresses the wrong
+			// link, which is the failure this map exists to remove.
+			return fmt.Errorf("set ext link for %s: %w", what, err)
 		}
 	}
 	// A stale LPM entry is worse than no entry: it outranks the default-uplink
@@ -544,10 +553,18 @@ func (m *Manager) pruneExtLinks(idx int, keep []overlayLpmKey) error {
 	return nil
 }
 
-// extLinksToPrune picks the entries to drop: one pointing at idx that this bind
-// did not write (the link was renumbered), or one naming a link that no longer
-// exists. Entries for other, live links are left alone — they are another
-// address's answer.
+// lpmFullPrefix is a fully specified lpm_key: 32 scope bits + 128 address bits.
+// A key shorter than this is a subnet; a key at it is one address.
+const lpmFullPrefix = 32 + 128
+
+// extLinksToPrune picks the entries to drop.
+//
+// A SUBNET key pointing at idx that this bind did not write means the link was
+// renumbered, so it goes. A HOST key belongs to one address rather than to this
+// bind, and several addresses share a link: deleting those here made two
+// addresses on one link take turns removing each other's entry, so each was
+// broken half the time. They are left alone. Any entry naming a link that no
+// longer exists goes whatever its shape.
 func extLinksToPrune(have map[overlayLpmKey]overlayExtEgress, idx int, keep []overlayLpmKey, live func(int) bool) []overlayLpmKey {
 	kept := make(map[overlayLpmKey]bool, len(keep))
 	for _, k := range keep {
@@ -557,7 +574,9 @@ func extLinksToPrune(have map[overlayLpmKey]overlayExtEgress, idx int, keep []ov
 	for k, v := range have {
 		switch {
 		case kept[k]:
-		case int(v.Ifindex) == idx, !live(int(v.Ifindex)):
+		case !live(int(v.Ifindex)):
+			stale = append(stale, k)
+		case int(v.Ifindex) == idx && k.Prefixlen < lpmFullPrefix:
 			stale = append(stale, k)
 		}
 	}

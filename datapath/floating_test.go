@@ -447,6 +447,45 @@ func TestExtLinkKeysRoutedPool(t *testing.T) {
 	}
 }
 
+// Several addresses share a link, and a bind only knows its own keys. Pruning
+// every entry pointing at the link it just wrote had two addresses on one link
+// taking turns deleting each other, so each was broken half the time.
+func TestExtLinksToPruneKeepsSiblingAddresses(t *testing.T) {
+	key := func(c string) overlayLpmKey {
+		k, err := lpmKey(0, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	a, b := key("203.0.113.5/32"), key("203.0.113.6/32") // two routed-pool addresses
+	sub := key("10.20.100.0/24")                         // the link they arrive through
+	have := map[overlayLpmKey]overlayExtEgress{
+		a:   {Ifindex: uint32(vlanIdx)},
+		b:   {Ifindex: uint32(vlanIdx)},
+		sub: {Ifindex: uint32(vlanIdx)},
+	}
+
+	// B binds: its keys are B/32 and the subnet. A/32 must survive.
+	stale := extLinksToPrune(have, vlanIdx, []overlayLpmKey{b, sub}, func(int) bool { return true })
+	for _, s := range stale {
+		if s == a {
+			t.Fatal("a bind deleted a sibling address's entry; the two would alternate breaking")
+		}
+	}
+	if len(stale) != 0 {
+		t.Errorf("pruned %d key(s) on a healthy two-address link, want 0", len(stale))
+	}
+
+	// A renumbered link still loses its old SUBNET key.
+	oldSub := key("10.20.200.0/24")
+	have[oldSub] = overlayExtEgress{Ifindex: uint32(vlanIdx)}
+	stale = extLinksToPrune(have, vlanIdx, []overlayLpmKey{b, sub}, func(int) bool { return true })
+	if len(stale) != 1 || stale[0] != oldSub {
+		t.Fatalf("pruned %v, want just the renumbered-away subnet key", stale)
+	}
+}
+
 // A stale LPM entry outranks the default-uplink fallback, so a renumbered link
 // would keep claiming its old prefix forever.
 func TestExtLinksToPrune(t *testing.T) {

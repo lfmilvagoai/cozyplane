@@ -583,8 +583,13 @@ struct {
                              // floating-IP range when it differs from the
                              // default-route uplink (an OCI L2 VLAN). 0 = same
                              // link as CFG_UPLINK_IFINDEX (single-NIC default).
-                             // Floating egress redirects here.
-#define CFG_FLOAT_NH       7 // v4 next-hop (network order) for floating egress
+                             // Read only by the v6 egress sites and lb_return's
+                             // v6/DSR fallback now; v4 selects per address
+                             // through ext_links.
+#define CFG_FLOAT_NH       7 // VESTIGIAL: no program reads it; ext_egress.nh carries
+                             // the per-link next-hop now. Still written, like
+                             // uplink_mac, because dropping a pinned cell's
+                             // writer is its own change
                              // out the floating uplink — the L2 fabric's virtual
                              // router. Needed because the kernel FIB routes
                              // off-subnet destinations via the *default* uplink,
@@ -632,9 +637,11 @@ struct {
 } uplink_mac SEC(".maps");
 
 // ext_links: which of this node's links can source a given external address —
-// a floating IP, a VPC NAT identity, an LB frontend on a reply. One entry per
-// link that carries external addresses, keyed by that link's subnet, so an LPM
-// lookup on the address being stamped names the link to leave by.
+// a floating IP, a VPC NAT identity, an LB frontend on a reply. Keyed by the
+// address, so an LPM lookup on the one being stamped names the link to leave by:
+// a host key per external address, plus each link's subnet behind it. An address
+// routed to the node sits OUTSIDE its link's subnet, which is why the host key
+// exists and why the entry count follows addresses, not links.
 //
 // This replaces CFG_FLOAT_IFINDEX for v4 egress selection. That cell held one
 // answer for the node, and a node can carry external addresses on two links at
@@ -658,7 +665,9 @@ struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__type(key, struct lpm_key);
 	__type(value, struct ext_egress);
-	__uint(max_entries, 64);
+	// Two keys per external address, so this follows the address budget rather
+	// than the link count; `floating` holds 65536 of the same population.
+	__uint(max_entries, 8192);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } ext_links SEC(".maps");
@@ -678,11 +687,9 @@ struct {
 } float_uplink_mac SEC(".maps");
 
 // float_net: the floating uplink's v4 subnet (base and mask, network order).
-// Floating egress needs it to pick the right neighbour: an ON-subnet
-// destination is resolved directly (the FIB's on-link route does that with a
-// plain redirect), while an OFF-subnet one must go via CFG_FLOAT_NH — the L2
-// fabric's virtual router, which forwards out of the VLAN but does NOT hairpin
-// intra-subnet traffic back in (OCI drops it).
+// VESTIGIAL: no program reads it. ext_egress.base/mask carry the same on- vs
+// off-subnet test, per link instead of per node. Still written, like uplink_mac,
+// because dropping a PIN_BY_NAME map strands a pin on every upgraded node.
 struct float_net {
 	__be32 base;
 	__be32 mask;
@@ -3015,10 +3022,8 @@ static __always_inline int floating_egress_snat(struct __sk_buff *skb, struct ip
 	// Ungrouped pods, replies (SYN-gated) and ICMP pass inside ns_egress_ok.
 	if (!ns_egress_ok(skb, net, 0, proto, src128, dst128))
 		return TC_ACT_SHOT;
-	// Floating egress leaves by the floating uplink (the link that carries the
-	// public range) — only there is the public source a valid address for the
-	// wire. Falls back to the default uplink when they are the same link.
-	// The link that can source this address, not a node-wide guess.
+	// Floating egress leaves by the link that carries the public address — only
+	// there is that source valid for the wire.
 	__u32 uplink;
 	__be32 xnh = 0, xbase = 0, xmask = 0;
 	struct ext_egress *xl = ext_link_of(public_ip);
@@ -4082,6 +4087,12 @@ static __always_inline int lb_return(struct __sk_buff *skb, struct pkt *p, __u32
 			xmask = xl->mask; // copied: a packet store invalidates the value
 		}
 	}
+	// The node-wide cell before the default uplink, matching the v6 egress
+	// sites: lb_return serves both families, ext_links has no v6 entries, and a
+	// v6 DSR reply has no arrival link either — dropping straight to the default
+	// uplink would move it off a secondary link that currently carries it.
+	if (!uplink)
+		uplink = cfg(CFG_FLOAT_IFINDEX);
 	if (!uplink)
 		uplink = cfg(CFG_UPLINK_IFINDEX);
 	if (!uplink)
