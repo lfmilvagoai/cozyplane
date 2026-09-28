@@ -287,13 +287,26 @@ func (m *Manager) bindFloatUplink(link netlink.Link, ip, gw net.IP) error {
 
 	m.floatMu.Lock()
 	defer m.floatMu.Unlock()
+
+	// Before the slot check, not after it: ext_links is keyed per ADDRESS and the
+	// slot below is per node, so two addresses reaching the node through the same
+	// gateway on the same link produce an identical binding. Gating this on the
+	// slot meant only the first of them ever got a host key, and the rest fell
+	// back to the default uplink — the failure the host key exists to prevent.
+	if err := m.setExtLink(idx, ip, subnet, nh); err != nil {
+		return err
+	}
+
 	if !floatNeedsProgram(m.floatBound, want) {
-		return nil // already configured this run
+		return nil // the node-wide slot is already what we want
 	}
 	if floatContends(m.floatBound, want) {
 		// One slot: the loser keeps from_uplink attached and the two flip on
 		// every resync.
-		slog.Default().Warn("floating uplink re-bound; two addresses are contending for the single slot",
+		// v4 egress is unaffected now — each address has its own ext_links entry
+		// — but the node-wide cell still moves, and v6 egress and the DSR
+		// fallback still follow it, so this remains a correctness signal.
+		slog.Default().Warn("floating uplink re-bound; the node-wide cell now follows the newer link (v6 egress and DSR)",
 			"from_ifindex", m.floatBound.ifindex, "to_ifindex", idx,
 			"from_nh", m.floatBound.nh, "to_nh", want.nh,
 			"from_base", m.floatBound.base, "to_base", want.base, "link", link.Attrs().Name)
@@ -464,3 +477,127 @@ func (m *Manager) Floatings() (map[string]bool, error) {
 // the kernel's routing decision, delivery works however that was arranged and to
 // whichever node the address lands on — the pod is found through `floating` and
 // reached over the overlay if it lives elsewhere.
+
+// setExtLink records that idx can source ip, with nh as the router for
+// destinations outside the link's subnet.
+//
+// Two keys, because the datapath looks up the address it is about to stamp and
+// that address is not always inside the link's subnet. A routed pool is
+// delivered by a router ON the link, so the pool sits outside it — the subnet
+// key would miss and egress would fall back to the default uplink, which is the
+// wrong segment. The host key answers for exactly that address; the subnet key
+// covers every other address the link carries, including ones the pool grows
+// into before the agent sees them.
+func (m *Manager) setExtLink(idx int, ip net.IP, subnet *net.IPNet, nh net.IP) error {
+	keys, err := extLinkKeys(ip, subnet)
+	if err != nil {
+		return err
+	}
+	val, err := extEgressVal(idx, subnet, nh)
+	if err != nil {
+		return err
+	}
+	for i, k := range keys {
+		what := ip.String()
+		if i > 0 {
+			what = subnet.String()
+		}
+		if err := m.objs.ExtLinks.Put(&k, &val); err != nil {
+			// Out of room here means the address silently egresses the wrong
+			// link, which is the failure this map exists to remove.
+			return fmt.Errorf("set ext link for %s: %w", what, err)
+		}
+	}
+	// A stale LPM entry is worse than no entry: it outranks the default-uplink
+	// fallback, so a link that was renumbered would keep claiming its old prefix.
+	return m.pruneExtLinks(idx, keys)
+}
+
+// extLinkKeys returns the keys an external address on a link is reachable by:
+// the address itself, and the link's subnet.
+func extLinkKeys(ip net.IP, subnet *net.IPNet) ([]overlayLpmKey, error) {
+	host := "/128"
+	if ip.To4() != nil {
+		host = "/32"
+	}
+	hk, err := lpmKey(0, ip.String()+host)
+	if err != nil {
+		return nil, fmt.Errorf("ext link key for %s: %w", ip, err)
+	}
+	sk, err := lpmKey(0, subnet.String())
+	if err != nil {
+		return nil, fmt.Errorf("ext link key for %s: %w", subnet, err)
+	}
+	return []overlayLpmKey{hk, sk}, nil
+}
+
+// pruneExtLinks drops entries pointing at idx that are no longer among keep, and
+// any entry whose link is gone.
+func (m *Manager) pruneExtLinks(idx int, keep []overlayLpmKey) error {
+	have := map[overlayLpmKey]overlayExtEgress{}
+	var k overlayLpmKey
+	var v overlayExtEgress
+	it := m.objs.ExtLinks.Iterate()
+	for it.Next(&k, &v) {
+		have[k] = v
+	}
+	if err := it.Err(); err != nil {
+		return fmt.Errorf("iterate ext links: %w", err)
+	}
+	live := func(i int) bool { _, err := netlink.LinkByIndex(i); return err == nil }
+	for _, s := range extLinksToPrune(have, idx, keep, live) {
+		if err := m.objs.ExtLinks.Delete(&s); err != nil && !isNotExist(err) {
+			return fmt.Errorf("prune ext link: %w", err)
+		}
+	}
+	return nil
+}
+
+// lpmFullPrefix is a fully specified lpm_key: 32 scope bits + 128 address bits.
+// A key shorter than this is a subnet; a key at it is one address.
+const lpmFullPrefix = 32 + 128
+
+// extLinksToPrune picks the entries to drop.
+//
+// A SUBNET key pointing at idx that this bind did not write means the link was
+// renumbered, so it goes. A HOST key belongs to one address rather than to this
+// bind, and several addresses share a link: deleting those here made two
+// addresses on one link take turns removing each other's entry, so each was
+// broken half the time. They are left alone. Any entry naming a link that no
+// longer exists goes whatever its shape.
+func extLinksToPrune(have map[overlayLpmKey]overlayExtEgress, idx int, keep []overlayLpmKey, live func(int) bool) []overlayLpmKey {
+	kept := make(map[overlayLpmKey]bool, len(keep))
+	for _, k := range keep {
+		kept[k] = true
+	}
+	var stale []overlayLpmKey
+	for k, v := range have {
+		switch {
+		case kept[k]:
+		case !live(int(v.Ifindex)):
+			stale = append(stale, k)
+		case int(v.Ifindex) == idx && k.Prefixlen < lpmFullPrefix:
+			stale = append(stale, k)
+		}
+	}
+	return stale
+}
+
+// extEgressVal builds the map value: the link, its router, and its subnet for
+// the on/off-subnet test the datapath makes against a destination.
+func extEgressVal(idx int, subnet *net.IPNet, nh net.IP) (overlayExtEgress, error) {
+	base := subnet.IP.Mask(subnet.Mask).To4()
+	mask := net.IP(subnet.Mask).To4()
+	if base == nil || mask == nil {
+		return overlayExtEgress{}, fmt.Errorf("ext link %s is not v4", subnet)
+	}
+	v := overlayExtEgress{
+		Ifindex: uint32(idx),
+		Base:    binary.NativeEndian.Uint32(base),
+		Mask:    binary.NativeEndian.Uint32(mask),
+	}
+	if nh4 := nh.To4(); nh4 != nil {
+		v.Nh = binary.NativeEndian.Uint32(nh4)
+	}
+	return v, nil
+}

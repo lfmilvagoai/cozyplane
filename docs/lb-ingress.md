@@ -416,18 +416,115 @@ The DSR path is the exception: it arrives over the overlay, so its
 `ingress_ifindex` is the geneve device and says nothing about egress. Those flows
 store 0 and keep the node-wide slot.
 
-**Remaining limitation.** `float_net`, `CFG_FLOAT_IFINDEX` and `CFG_FLOAT_NH` are
-still single-cell, and floating-IP and VPC-NAT egress still pick their link from
-that one slot. On a node with two external-address links those paths have the
-problem the LB path just lost. The agent warns whenever a live binding is
-displaced, so the condition is identifiable; closing it properly means a
-per-ifindex map shape.
+### The egress link is a property of the address
+
+Whenever the node emits a packet sourced from an **external** address — a
+floating IP, a VPC's NAT identity, an LB frontend on a reply — it cannot hand the
+packet to the kernel: the source belongs to a pod, not the node, and the reply has
+to return to the same place. So the datapath selects an interface itself. Which
+interface is a property of the address: *which of this node's links can
+legitimately source it*. A node carrying external addresses on two links — an L2
+VLAN with an announced pool on one, cloud-NAT'd node addresses on the other — has
+two different answers at once, so no single node-wide value can be correct.
+
+`ext_links` is that mapping. It is an LPM trie over the repo's `lpm_key`
+(`scope_net` 0, addresses in the usual 128-bit form, so one map serves both
+families), keyed by **the address**, with two keys written per external address:
+
+| key | covers |
+|---|---|
+| the address, as a host prefix | that address, wherever it sits |
+| the link's subnet | every other address the link carries |
+
+Both carry the same value: `{ifindex, nh, base, mask}` — the link, its router,
+and its subnet. The entry count therefore follows the number of external
+addresses, not the number of links.
+
+A lookup on the address about to be stamped returns the link to leave by and the
+router to reach an off-subnet client through; `base`/`mask` answer whether a given
+destination is on that link's segment (resolve it directly) or beyond it (via the
+router).
+
+Two keys go in per address, because the address is not always inside the link's
+subnet. A **routed pool** is delivered by a router *on* the link, so the pool sits
+outside it: the subnet key alone would miss and egress would fall back to the
+default uplink — the wrong segment, and the same silent drop this map exists to
+prevent. So the address itself is keyed as a host prefix, and the link's subnet
+alongside it, covering addresses the pool grows into before the agent sees them.
+
+A **miss** then means no link on this node claims the address at all, and the
+default uplink with a plain FIB lookup is the answer.
+
+Selection order at the two v4 egress sites (`floating_egress_snat`,
+`vpc_nat_snat`):
+
+1. the address's own link, from `ext_links`;
+2. the default uplink (`CFG_UPLINK_IFINDEX`), FIB-resolved.
+
+**v6 is not there yet.** `EnsureFloatingUplink` returns early for a v6 address, so
+nothing writes a v6 entry and the lookup always misses. The v6 twins therefore
+keep the node-wide cell as their second step, ahead of the default uplink —
+dropping straight to the default would move v6 egress off a secondary link that
+currently carries it. Making v6 per-address means v6 floating-uplink selection
+first, which does not exist.
+
+`lb_return` keeps one step in front of that: the arrival interface recorded per
+flow is more exact than anything derived from the address, because it is also
+right for an address no link's subnet covers. It falls back to `ext_links` on the
+frontend address — which is what gives v4 DSR flows, arriving over the overlay
+with no usable arrival interface, a correct answer for the first time — then to
+the node-wide cell, and only then to the default uplink. That middle rung is not
+vestigial: `lb_return` serves both families, and a **v6** reply reaches it with no
+`ext_links` entry to find.
+
+**Superseded, still written.** `CFG_FLOAT_IFINDEX`, `CFG_FLOAT_NH` and `float_net`
+held the single node-wide answer. No v4 path reads them once `ext_links` is in
+place; `CFG_FLOAT_IFINDEX` survives only as the v6 fallback above. They are still
+written, because dropping a `PIN_BY_NAME` map strands a pin on every upgraded node;
+removing them is its own change, on the same terms as `uplink_mac`.
+
+**Stale entries, and the one that is not pruned.** An LPM entry is not inert when
+it goes stale — it outranks the default-uplink fallback, so a renumbered link
+would keep claiming its old prefix. Each bind drops the *subnet* keys pointing at
+the link it just wrote that are no longer that link's, and any entry naming a link
+that has gone. Host keys are left alone, because several addresses share a link
+and a bind only knows its own — deleting them there had two addresses on one link
+taking turns removing each other's entry.
+
+What that leaves open: an address that is simply **removed** keeps its host key,
+because nothing binds on its way out. Harmless until that address is re-homed onto
+a different link, when the stale key would win the lookup and pin egress to the
+old one. Closing it needs a recompute-and-diff reconciler owning the whole desired
+set, which is a larger change than this one — see [roadmap.md](roadmap.md).
 
 `float_uplink_mac` and `uplink_mac` are **vestigial** — no program has read them
 since the in-datapath ARP/NDP responder was removed, and the kernel answers v4
 ARP for addresses the node owns. They are still written so the pinned maps keep
 their shape; deleting a `PIN_BY_NAME` map strands a pin on every upgraded node,
 so that removal is its own change.
+
+## Testing the two-link case
+
+`test/two-link-e2e.sh` reproduces it without a cloud: `test/kind.yaml` nodes are
+docker containers, so a second link is a `docker network connect` away. The script
+attaches one, publishes an external address on **each** link, and requires both to
+be served at once.
+
+The pair is what makes it a test rather than a demonstration. The node-wide cell
+can only name one link, so against the **arrival-link** selection the second
+link's address still works while the default uplink's times out — one of two,
+which reads as "partly working" and is why the field diagnosis went to the inbound
+path.
+
+Be precise about what each check covers. The two HTTP checks discriminate for the
+*arrival-link* change: once a flow records its arrival interface, `lb_return` uses
+that and never consults `ext_links`, so they pass with or without the per-address
+selection. What covers the per-address map is the map-content check — that the
+secondary link's address, and a second address on the same link, each get a host
+key naming that link. That is also the shape the write path got wrong twice.
+
+What it does not cover: the floating-IP and VPC-NAT egress sites, which are
+pod-originated and would need a FloatingIP and a VPC in the fixture.
 
 ## Non-goals
 
