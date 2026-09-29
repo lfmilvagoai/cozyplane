@@ -473,3 +473,81 @@ returns `000` for a refusal and for a timeout alike. Those point at opposite end
 of the datapath — no interception versus a misrouted reply — so a probe that
 cannot tell them apart will send you to the wrong half. Record the failure mode,
 not just the code.
+
+## 12. The agent's datapath stopped loading on a 6.18 kernel (FIXED)
+
+A stand that had been idle for a month was woken and its `cozyplane`
+GitRepository moved to `main`. kpr and the controller rolled cleanly; the agent
+then crash-looped on all three Talos nodes (`6.18.38-talos`):
+
+```
+load datapath: load bpf objects: load program: argument list too long
+```
+
+`E2BIG` reads like a malformed syscall, and the program name in the trace
+(`cozyplane_from_pod`) invites a hunt for a bad map or a stale pin. It is
+neither. The verifier's own stats line, at the end of a log that opens with
+17k instructions of register state, says what it is:
+
+```
+BPF program is too large. Processed 1000001 insn
+processed 1000001 insns (limit 1000000) max_states_per_insn 19 total_states 30014
+```
+
+That is the **complexity** ceiling — states explored, not instructions emitted.
+`from_pod` is 18k instructions; the verifier walked a million.
+
+**The bump looked guilty and was not.** Measured on the host's 6.8 kernel,
+`from_pod` cost 484,222 states at the commit the stand had been running and
+485,077 at `main` — the two merged features added **+855 states, 0.18%**. Nothing
+in that range could double a budget. The program had been sitting at
+approximately 100% of the 6.18 ceiling for two months, and a rounding error
+tipped it over. Rolling back restored the stand (the old build demonstrably
+re-pinned and wired pods on the same kernel), which is a mitigation, not a fix:
+the next commit of any size would have done the same thing.
+
+**Root cause — a byte loop behind an early return.** `addr128_eq` and
+`addr128_zero` compared 16-byte addresses with `#pragma unroll` and a
+`return 0` per byte. That is sixteen conditional branches, so up to sixteen
+distinct "not equal" fall-through states, and **each one re-explores everything
+the caller does after the call**. Two of those comparisons sit near the top of
+`from_pod` (the `fe80::1` bridge reply and the ServiceVIP hairpin loopback), so
+the entire rest of the hook was verified over and over. Comparing the address as
+two `__u64`s with a single branch:
+
+| | before | after |
+|---|---|---|
+| `from_pod` states (6.8) | 485,077 | **33,926** |
+| `from_pod` instructions | 18,052 | 17,805 |
+
+A 14x cut from ten lines of C, and the object shrank 20 KB. Ablation was what
+found it: the function the guard called was innocent (stopping it at its first
+statement still cost 483,212), while deleting the three-line guard cost 451,037.
+
+**Why kind cannot catch this.** The same object costs ~485k states on 6.8 and
+over 1M on 6.18 — `max_states_per_insn` 5 versus 19, `total_states` 18,314
+versus 30,014. Newer verifiers explore more, so a program can pass every local
+check and fail on the cluster; `count_dir` hit this same wall on 6.12 (see
+[internals.md](internals.md)). kind runs the host kernel, so the single-node
+load check is silent on complexity by construction.
+
+**What to take from this.** Measure the budget instead of inferring it. Loading
+each program on its own with `LogLevelStats` and reading `processed N insns`
+back off a successful load turns "it loads" into a number, which is the only
+form in which headroom exists:
+
+```go
+coll, _ := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+        Maps:     ebpf.MapOptions{PinPath: pinRoot},
+        Programs: ebpf.ProgramOptions{LogLevel: ebpf.LogLevelStats},
+})
+// coll.Programs[name].VerifierLog: "processed 33926 insns (limit 1000000) ..."
+```
+
+Two traps worth naming, both of which cost time here. Truncating a function to
+bisect its cost only works at statement boundaries — an inserted
+`return` lands inside the preceding `if` body and silently makes the next call
+unconditional, which defeats the constant-folding that kept it cheap and
+produces a hotspot that does not exist. And `llvm-objdump` prints BPF jump
+offsets in decimal, so a `readelf` symbol size (hex, for a large program) and a
+disassembly offset are not the same units.

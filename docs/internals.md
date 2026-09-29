@@ -103,7 +103,8 @@ from `to_pod`** (rx for the destination net, tx for the source net), the one
 placement-independent delivery hook, so east-west is metered once. It is a
 `noinline` BPF-to-BPF subprogram that only looks up and increments (never
 allocates): inlining it blew `from_pod` past the verifier's 1M-instruction
-budget on a 6.12 kernel (6.8 accepted it — caught only on the dev cluster), and any callee
+budget on a 6.12 kernel (6.8 accepted it — caught only on the dev cluster; the
+same divergence took the whole hook down on 6.18, field note 12), and any callee
 stack of its own overflowed the 512-byte combined-frame limit against
 `from_pod`'s already-large frame. The **agent seeds** a zeroed PERCPU entry per
 VPC net (`EnsureVPCCounter`, alongside `SetNetwork`); the datapath can't create
@@ -594,6 +595,13 @@ set — the maps stay keyed by `{net_id, address}`, only wider. `net_id` (the VN
 is the scope, exactly as before; the address is now 16 bytes in network order (a
 v6 LPM key is `{prefixlen, scope_net, addr[16]}`). The delivery hooks parse
 either family, read src/dst as 128-bit, and drive the same lookups.
+
+`addr128_eq` and `addr128_zero` compare the 16 bytes as two `__u64`s under a
+single branch, never as a byte loop with an early return: sixteen branches leave
+the verifier sixteen fall-through states, and each re-explores the rest of the
+caller. Two of these guards sit near the top of `from_pod`, and the byte-loop
+form alone accounted for 93% of that hook's verifier cost — 485k states against
+a 1M ceiling (see field note 12). Keep new address predicates branch-flat.
 
 **A v4 address is stored in its RFC 6052 (NAT64) form**, `64:ff9b::a.b.c.d` (the
 v4 in the low 32 bits under a `/96` prefix), *not* the RFC 4291 IPv4-mapped

@@ -2145,13 +2145,17 @@ static __always_inline void nat_icmp_id(struct __sk_buff *skb, __u16 old, __u16 
 // pod's client is masqueraded to it, so the pod's reply comes back to from_pod.
 #define LINK_LOCAL_GW6 { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } }
 
+// Two u64 compares folded into one branch, not a byte loop: an early-return
+// loop leaves the verifier a separate fall-through state per byte, and each one
+// re-explores everything after the call. memcpy because addr128 is byte-aligned.
 static __always_inline int addr128_eq(const struct addr128 *a, const struct addr128 *b)
 {
-#pragma unroll
-	for (int i = 0; i < 16; i++)
-		if (a->b[i] != b->b[i])
-			return 0;
-	return 1;
+	__u64 a0, a1, b0, b1;
+	__builtin_memcpy(&a0, a->b, 8);
+	__builtin_memcpy(&a1, a->b + 8, 8);
+	__builtin_memcpy(&b0, b->b, 8);
+	__builtin_memcpy(&b1, b->b + 8, 8);
+	return ((a0 ^ b0) | (a1 ^ b1)) == 0;
 }
 
 // l4_ports6 reads the TCP/UDP ports of an IPv6 frame (fixed 40-byte header).
@@ -4621,13 +4625,13 @@ int cozyplane_lb_dsr(struct __sk_buff *skb)
 
 #define DNS_MISS -1
 
+// One branch, not sixteen -- see addr128_eq.
 static __always_inline int addr128_zero(const struct addr128 *a)
 {
-#pragma unroll
-	for (int i = 0; i < 16; i++)
-		if (a->b[i])
-			return 0;
-	return 1;
+	__u64 a0, a1;
+	__builtin_memcpy(&a0, a->b, 8);
+	__builtin_memcpy(&a1, a->b + 8, 8);
+	return (a0 | a1) == 0;
 }
 
 // dns_steer: from_pod's forward half. Called only for a non-gateway VPC pod
