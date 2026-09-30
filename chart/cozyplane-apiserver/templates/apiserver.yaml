@@ -79,16 +79,43 @@ rules:
     verbs: ["get", "list", "watch"]
   # The server registers its own APIService at startup
   # (--ensure-apiservice-service), rather than the chart shipping the object.
+  # Name-scoped: unscoped get/patch here would let this pod repoint any
+  # aggregated group in the cluster, Cozystack's own v1alpha1.apps.cozystack.io
+  # included.
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["apiservices"]
-    verbs: ["get", "create", "patch"]
+    # Mirrors the server's own constant (internal/cmd/server/apiservice.go:
+    # sdnVersion + "." + sdnGroup); not a knob, the server derives it.
+    resourceNames: ["v1alpha1.sdn.cozystack.io"]
+    verbs: ["get", "patch"]
+  # create is separate and unnamed because RBAC ignores resourceNames for create
+  # (the name is in the body, not the request path), and first boot has no object
+  # to name yet. It confers no hold over an APIService that already exists —
+  # changing or removing one needs patch or delete, which are granted for this
+  # group's name alone.
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["create"]
   # For upgrades from a pre-split install only: --remove-bootstrap-crds (off by
   # default) deletes the old single-group CRDs, which would otherwise keep the
   # group's OpenAPI from merging. A fresh install has no CRDs in this group —
-  # see docs/api-groups.md §"Why two groups".
+  # see docs/api-groups.md §"Why two groups". delete alone, and only these names:
+  # the code deletes each by name and never gets or lists them
+  # (internal/cmd/server/apiservice.go, sdnPlurals — keep this list in step).
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    verbs: ["get", "list", "delete"]
+    resourceNames:
+      - vpcs.sdn.cozystack.io
+      - vpcbindings.sdn.cozystack.io
+      - vpcpeerings.sdn.cozystack.io
+      - vpcgateways.sdn.cozystack.io
+      - ports.sdn.cozystack.io
+      - externalpools.sdn.cozystack.io
+      - floatingips.sdn.cozystack.io
+      - servicevips.sdn.cozystack.io
+      - securitygroups.sdn.cozystack.io
+      - hostfirewalls.sdn.cozystack.io
+    verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

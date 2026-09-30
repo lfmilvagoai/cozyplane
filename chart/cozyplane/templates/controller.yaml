@@ -96,9 +96,15 @@ rules:
     verbs: ["get", "list", "watch"]
   # Gateway Deployments for a VPCGateway family with no eBPF identity yet
   # (one with addresses for every family is pure eBPF — docs/north-south.md §6a).
+  # Read-only cluster-wide because the manager's informer cache is not namespace
+  # scoped (cmd/sdn-controller: plain ctrl.NewManager), so the Deployment watch
+  # is a cluster-wide LIST/WATCH. The write verbs are a Role in the release
+  # namespace instead — the only namespace a gateway Deployment is ever created
+  # in (gateway_controller.go builds them with Namespace: r.Config.Namespace,
+  # and POD_NAMESPACE is what the chart passes).
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
+    verbs: ["get", "list", "watch"]
   # Severed-gateway heal: recreate a Ready gateway pod whose .1 Port is gone.
   # watch: the persistent-Port controller watches virt-launcher pods to drive
   # live-migration cutover (kubevirt.io/nodeName) and GC.
@@ -121,6 +127,38 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cozyplane-controller
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-controller
+    namespace: {{ .Release.Namespace }}
+---
+# Writing gateway Deployments, scoped to this namespace. Cluster-wide
+# create/update/delete on Deployments would let a compromised controller replace
+# any workload in the cluster, and it never needs to: it only ever realizes them
+# here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozyplane-controller-gateways
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozyplane-controller-gateways
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozyplane-controller-gateways
 subjects:
   - kind: ServiceAccount
     name: cozyplane-controller
