@@ -11,6 +11,23 @@ records the trust model their exemptions rest on.
 | [NetworkPolicy](network-policy.md) | upstream `networking.k8s.io/v1` | namespace owners | net-0 pods — traffic on **net-0 pod IPs** |
 | [HostFirewall](host-firewall.md) | `sdn.cozystack.io` (cluster-scoped) | the cluster operator only | the **nodes** themselves |
 
+## Three layers, and no fourth — Cilium policy is inert here
+
+Under the cozyplane networking variant these three are the whole set.
+**CiliumNetworkPolicy is a no-op**: cozyplane owns the datapath, it does not
+consult Cilium's policy maps, and nothing in these hooks reads a CNP. A cluster
+that still has Cilium installed for socket-LB
+([kube-proxy-replacement.md](kube-proxy-replacement.md)) is no exception — the
+LB control plane is all cozyplane uses of it.
+
+So `cozystack-api`'s own `SecurityGroup`, which is a restricted interface over
+CiliumNetworkPolicy, **is not served** under this variant, and cozyplane's
+`SecurityGroup` above is the tenant-facing instrument for policing traffic
+inside and across VPCs. The two kinds share a name and nothing else: different
+enforcement, different scope, and only one of them is served in any given
+cluster. There is no schema to reconcile between them, and a rule written for
+one does not carry over.
+
 ## Trust zones
 
 The layers map onto three trust zones, in descending privilege:
