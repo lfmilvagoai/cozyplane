@@ -23,7 +23,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 # -buildvcs=false: VCS stamping embeds the commit hash, so two commits with
 # identical sources produced different binaries — exactly what defeats the
 # digest-pin loop (#4): the pin commit itself changed the digest it pinned.

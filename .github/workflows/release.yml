@@ -28,6 +28,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # crane reads a published leg without running it. Pinned, and from the
+      # module proxy rather than a third-party action.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install crane
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -57,6 +67,11 @@ jobs:
           sbom: false
           cache-from: type=gha,scope=cozyplane
           cache-to: type=gha,mode=max,scope=cozyplane
+
+      # Each advertised leg must really be that architecture; it was not (the
+      # script says why).
+      - name: verify both legs are natively built
+        run: .github/scripts/verify-arch.sh '${{ env.IMAGE }}@${{ steps.build.outputs.digest }}' usr/local/bin/cozyplane-agent
 
       # The chart pins the image by digest; surface it so it's a copy-paste away.
       - name: report digest
@@ -93,6 +108,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # crane reads a published leg without running it. Pinned, and from the
+      # module proxy rather than a third-party action.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kpr/go.mod
+      - name: install crane
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -121,6 +146,11 @@ jobs:
           sbom: false
           cache-from: type=gha,scope=kpr
           cache-to: type=gha,mode=max,scope=kpr
+
+      # Each advertised leg must really be that architecture; it was not (the
+      # script says why).
+      - name: verify both legs are natively built
+        run: .github/scripts/verify-arch.sh '${{ env.IMAGE_KPR }}@${{ steps.build.outputs.digest }}' usr/bin/cozyplane-kpr
 
       - name: report digest
         run: |

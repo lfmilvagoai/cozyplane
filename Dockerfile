@@ -12,7 +12,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 # -buildvcs=false: VCS stamping embeds the commit hash, so two commits with
 # identical sources produced different binaries — exactly what defeats the
 # digest-pin loop (#4): the pin commit itself changed the digest it pinned.
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /ou
 
 # Fetch the upstream host-local and loopback CNI plugins.
 FROM --platform=$BUILDPLATFORM curlimages/curl:8.11.0@sha256:83a505ba2ba62f208ed6e410c268b7b9aa48f0f7b403c8108b9773b44199dbba AS cni
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 ARG CNI_PLUGINS_VERSION=v1.9.1
 RUN curl -sSL -o /tmp/cni.tgz \
       https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-${TARGETARCH}-${CNI_PLUGINS_VERSION}.tgz && \
