@@ -73,12 +73,27 @@ controller, the aggregated apiserver, the gateway and the responder — one imag
 six binaries. Tags: `main`, `main-<short-sha>`, and semver on tags. The workflow
 prints the resulting digest into the run's job summary.
 
-The build is **digest-reproducible** ([#4](../../issues/4)): attestations off
-(`provenance: false`, `sbom: false` — their manifests embed run metadata and land
-in the index), `SOURCE_DATE_EPOCH=0` plus `rewrite-timestamp=true` to pin layer
-and config timestamps, digest-pinned base images, `-trimpath -buildvcs=false` on
-every `go build`, and apt byproducts removed in the same layer. The same source
-tree therefore always produces the same index digest.
+The build is **digest-reproducible** ([#4](../../issues/4)): `SOURCE_DATE_EPOCH=0`
+plus `rewrite-timestamp=true` to pin layer and config timestamps, digest-pinned
+base images, `-trimpath -buildvcs=false` on every `go build`, and apt byproducts
+removed in the same layer. The same source tree therefore always produces the
+same index digest.
+
+Both legs are verified after the push: `.github/scripts/verify-arch.sh` reads one
+binary out of each advertised platform and fails the job unless `file` agrees.
+This is not hypothetical — `ARG TARGETARCH=amd64` once made both legs amd64 while
+the index still advertised arm64 (see the script, and
+[bringup-field-notes.md](bringup-field-notes.md)).
+
+**Attestations are on for `v*` tags and off for `main`**, because they cannot be
+both. A provenance or SBOM manifest embeds run metadata and lands in the index,
+so the digest moves on every run — which is exactly what the pin loop in §4 needs
+not to happen. A release is pinned once as `vX.Y.Z@sha256:…` and never chased, so
+it can afford them; `main`, which dev clusters track through a digest that gets
+refreshed commit by commit, cannot. If provenance is ever wanted on `main` too,
+the pin loop has to change with it — pin tagged releases instead of chasing
+`main` — rather than the two being switched on together and the convergence
+quietly breaking.
 
 ### `ghcr.io/lllamnyp/cozyplane-kpr` — CI-built, multi-arch, reproducible
 
@@ -105,6 +120,41 @@ Building it locally:
 ```sh
 docker build -t cozyplane-kpr:dev -f kpr/Dockerfile kpr
 ```
+
+## 3a. Cutting a tagged release
+
+`release.yml` already triggers on `v*` as well as on `main`, so a release is one
+push:
+
+```bash
+git tag -s v0.1.0 -m 'cozyplane v0.1.0'   # annotated; signed if you have a key
+git push origin v0.1.0
+```
+
+That builds both images for both platforms, verifies both legs, attaches
+provenance and an SBOM, and tags the result `v0.1.0`, `0.1.0` and `0.1` (the
+`{{raw}}` form is there so the literal `vX.Y.Z` a consumer expects exists). Read
+the digest out of the run summary and pin the release form:
+
+```
+ghcr.io/lllamnyp/cozyplane:v0.1.0@sha256:…
+```
+
+The tag and the digest together are what a downstream repository should vendor: the
+tag says which release, the digest says exactly which bytes, and the digest is
+what actually resolves.
+
+Two things are deliberately **not** set up here, both operator decisions:
+
+- **Signing.** No cosign step and no key material in this repository. Adding one
+  means deciding where the key lives (keyless OIDC against the workflow identity
+  is the obvious candidate) — a decision about the project's trust root, not
+  about packaging.
+- **Where releases ultimately live.** These images are built under
+  `ghcr.io/lllamnyp`, which is a personal namespace. If cozyplane ships as part
+  of Cozystack, `ghcr.io/cozystack` is the likelier home; that move changes every
+  pin in §4 and the registry credentials CI uses, so it wants doing once,
+  deliberately.
 
 ## 4. The digest pin, and why it isn't circular
 

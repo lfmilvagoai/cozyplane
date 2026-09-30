@@ -45,15 +45,23 @@ jobs:
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{raw}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      # Digest-reproducible (#4): no provenance/SBOM attestation manifests (they
-      # embed run metadata and land in the index, changing its digest every
-      # run), and rewrite-timestamp + SOURCE_DATE_EPOCH pin layer mtimes and the
-      # image-config timestamps, so the same source tree always produces the
-      # same index digest. Labels from metadata-action are dropped for the same
-      # reason (they embed the run's revision/created timestamps).
+      # Digest-reproducible on main (#4): rewrite-timestamp + SOURCE_DATE_EPOCH
+      # pin layer mtimes and the image-config timestamps, so the same source tree
+      # always produces the same index digest — which is what lets a pin commit
+      # rebuild to the digest it just pinned. Labels from metadata-action are
+      # dropped for the same reason (they embed the run's revision/created
+      # timestamps).
+      #
+      # Attestations are the one thing that cannot be both: a provenance or SBOM
+      # manifest embeds run metadata and lands in the index, so the digest moves
+      # every run and the pin loop never converges. They are therefore on for
+      # `v*` tags — a release is pinned as vX.Y.Z@sha256:… once, and never
+      # chased — and off for main, which is what dev clusters track.
+      # docs/packaging.md §3 has the reasoning.
       - id: build
         uses: docker/build-push-action@v6
         env:
@@ -63,8 +71,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           outputs: type=image,rewrite-timestamp=true,push=true
-          provenance: false
-          sbom: false
+          provenance: ${{ startsWith(github.ref, 'refs/tags/v') && 'mode=max' || 'false' }}
+          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
           cache-from: type=gha,scope=cozyplane
           cache-to: type=gha,mode=max,scope=cozyplane
 
@@ -125,13 +133,14 @@ jobs:
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{raw}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      # Digest-reproducible on the same terms as the cozyplane image (#4); see
-      # the comment on that job. The build context is kpr/, so nothing outside
-      # that module reaches the image. A distinct cache scope keeps the two
-      # images from evicting each other's layers.
+      # Digest-reproducible, and attestations on tags only, on the same terms as
+      # the cozyplane image (#4); see the comment on that job. The build context
+      # is kpr/, so nothing outside that module reaches the image. A distinct
+      # cache scope keeps the two images from evicting each other's layers.
       - id: build
         uses: docker/build-push-action@v6
         env:
@@ -142,8 +151,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           outputs: type=image,rewrite-timestamp=true,push=true
-          provenance: false
-          sbom: false
+          provenance: ${{ startsWith(github.ref, 'refs/tags/v') && 'mode=max' || 'false' }}
+          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
           cache-from: type=gha,scope=kpr
           cache-to: type=gha,mode=max,scope=kpr
 
