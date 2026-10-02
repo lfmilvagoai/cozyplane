@@ -92,6 +92,7 @@ func main() {
 		masqMode      string
 		vpcDNS        bool
 		clusterDNSIPs string
+		metricsAddr   string
 	)
 	flag.IntVar(&mtu, "mtu", 1450, "pod MTU (underlay MTU minus Geneve overhead)")
 	flag.UintVar(&vni, "vni", uint(datapath.DefaultVNI), "VNI for the default network")
@@ -109,6 +110,8 @@ func main() {
 		"steer VPC pods' cluster-DNS queries to the node-local split-horizon resolver (docs/services-in-vpc.md)")
 	flag.StringVar(&clusterDNSIPs, "cluster-dns", "",
 		"comma-separated cluster DNS ClusterIP(s) to steer; empty auto-discovers from the kube-system/kube-dns Service")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":9411",
+		"listen address for the Prometheus /metrics endpoint; the agent is hostNetwork, so bind a specific node address to keep it off public interfaces; empty disables it")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -121,13 +124,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(nodeName, mtu, uint32(vni), cniConfName, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, log); err != nil {
+	if err := run(nodeName, mtu, uint32(vni), cniConfName, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, metricsAddr, log); err != nil {
 		log.Error("agent failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs string, log *slog.Logger) error {
+func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs, metricsAddr string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -426,7 +429,7 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort ui
 		// VPC via the same VPC lister the networks map is built from. Outside the
 		// gate so the endpoint is up from the start; until the factory runs the
 		// lister is simply empty and the counters carry no VPC names.
-		serveMetrics(ctx, mgr, factory.Sdn().V1alpha1().VPCs(), nodeName, log)
+		serveMetrics(ctx, mgr, factory.Sdn().V1alpha1().VPCs(), nodeName, metricsAddr, log)
 
 		register := func(context.Context) error {
 			watchVPCs(factory, mgr, log)
@@ -1930,10 +1933,17 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 }
 
 // serveMetrics exposes the per-VPC datapath traffic counters (#2) as Prometheus
-// text on :9411/metrics, labeled by the owning VPC. Hand-rolled exposition (no
-// client dependency), read fresh on each scrape from the PERCPU map and the VPC
-// lister (net id -> VPC namespace/name).
-func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1informers.VPCInformer, nodeName string, log *slog.Logger) {
+// text on addr (default :9411) at /metrics, labeled by the owning VPC.
+// Hand-rolled exposition (no client dependency), read fresh on each scrape from
+// the PERCPU map and the VPC lister (net id -> VPC namespace/name). The agent is
+// hostNetwork, so addr decides which node addresses expose the counters: the
+// chart passes the node's primary InternalIP (via the downward API) so a public
+// secondary address serves nothing. Empty disables the endpoint.
+func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1informers.VPCInformer, nodeName, addr string, log *slog.Logger) {
+	if addr == "" {
+		log.Info("metrics endpoint disabled (--metrics-bind-address empty)")
+		return
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		counters, err := mgr.VPCCounters()
@@ -2066,13 +2076,13 @@ func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1in
 	// finishes its request headers holds a goroutine forever, and this listener
 	// is on the node's own address (hostNetwork) where anything reachable can
 	// open one.
-	srv := &http.Server{Addr: ":9411", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
 	go func() {
-		log.Info("serving per-VPC metrics", "addr", ":9411/metrics")
+		log.Info("serving per-VPC metrics", "addr", addr+"/metrics")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Warn("metrics server", "err", err)
 		}

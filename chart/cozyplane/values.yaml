@@ -56,6 +56,12 @@ egress:
   internalCIDRs: []
 
 agent:
+  # Bind address for the per-VPC Prometheus metrics (/metrics, no auth). The
+  # kubelet resolves $(HOST_IP) to the node's primary InternalIP, so in-cluster
+  # Prometheus scrapes the agent pods on :9411 as usual (hostNetwork: pod IP ==
+  # host IP) while any other node address — a public one included — serves
+  # nothing. ":9411" restores listening on every address; "" disables metrics.
+  metricsBindAddress: "$(HOST_IP):9411"
   priorityClassName: system-node-critical
   resources:
     requests:
