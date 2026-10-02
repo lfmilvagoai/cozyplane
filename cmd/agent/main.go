@@ -1937,6 +1937,30 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 	})
 }
 
+// normalizeBindAddr brackets a bare IPv6 host: "fd00::1:9411" -> "[fd00::1]:9411".
+// The chart concatenates the node's primary InternalIP with ":9411", which does
+// not parse when that address is v6, and the only symptom is a warn log and no
+// metrics. Rewrites only when the host parses as an IP, so a malformed value is
+// passed through rather than mangled.
+func normalizeBindAddr(addr string) string {
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		return addr // already well formed, brackets included
+	}
+	i := strings.LastIndex(addr, ":")
+	if i <= 0 {
+		return addr
+	}
+	host, port := addr[:i], addr[i+1:]
+	if net.ParseIP(host) == nil {
+		return addr
+	}
+	cand := "[" + host + "]:" + port
+	if _, _, err := net.SplitHostPort(cand); err != nil {
+		return addr
+	}
+	return cand
+}
+
 // serveMetrics exposes the per-VPC datapath traffic counters (#2) as Prometheus
 // text on addr (default :9411) at /metrics, labeled by the owning VPC.
 // Hand-rolled exposition (no client dependency), read fresh on each scrape from
@@ -1951,6 +1975,10 @@ func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1in
 	if addr == "" {
 		log.Info("metrics endpoint disabled (--metrics-bind-address empty)")
 		return
+	}
+	if norm := normalizeBindAddr(addr); norm != addr {
+		log.Info("metrics bind address bracketed for IPv6", "from", addr, "to", norm)
+		addr = norm
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
