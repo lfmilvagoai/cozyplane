@@ -23,10 +23,10 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
-  # Cilium's imported cells reconcile their own CRDs (CiliumNode, LB IP pools, …).
-  - apiGroups: [cilium.io]
-    resources: ["*"]
-    verbs: [get, list, watch, create, update, patch, delete]
+  # No cilium.io rule: the wired cells watch only Services/EndpointSlices (LB
+  # reflector) and node-local Pods/Namespaces (daemon tables); the lone cilium.io
+  # consumer, CiliumLocalRedirectPolicy, is compiled in but disabled (kpr/main.go
+  # stubs DaemonConfig with EnableLocalRedirectPolicy=false).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
