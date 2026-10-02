@@ -40,6 +40,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
 	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,6 +51,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	metricsfilters "sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 
 	localv1alpha1 "github.com/lllamnyp/cozyplane/api/localsdn/v1alpha1"
 	sdnv1alpha1 "github.com/lllamnyp/cozyplane/api/sdn/v1alpha1"
@@ -93,6 +95,7 @@ func main() {
 		vpcDNS        bool
 		clusterDNSIPs string
 		metricsAddr   string
+		metricsSecure bool
 	)
 	flag.IntVar(&mtu, "mtu", 1450, "pod MTU (underlay MTU minus Geneve overhead)")
 	flag.UintVar(&vni, "vni", uint(datapath.DefaultVNI), "VNI for the default network")
@@ -112,6 +115,8 @@ func main() {
 		"comma-separated cluster DNS ClusterIP(s) to steer; empty auto-discovers from the kube-system/kube-dns Service")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":9411",
 		"listen address for the Prometheus /metrics endpoint; the agent is hostNetwork, so bind a specific node address to keep it off public interfaces; empty disables it")
+	flag.BoolVar(&metricsSecure, "metrics-secure", true,
+		"gate /metrics behind delegated authn/authz (TokenReview + SubjectAccessReview against the kube-apiserver); a scraper then needs a ServiceAccount token authorized for get on nonResourceURL /metrics")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -124,13 +129,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(nodeName, mtu, uint32(vni), cniConfName, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, metricsAddr, log); err != nil {
+	if err := run(nodeName, mtu, uint32(vni), cniConfName, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, metricsAddr, metricsSecure, log); err != nil {
 		log.Error("agent failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs, metricsAddr string, log *slog.Logger) error {
+func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs, metricsAddr string, metricsSecure bool, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -429,7 +434,7 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort ui
 		// VPC via the same VPC lister the networks map is built from. Outside the
 		// gate so the endpoint is up from the start; until the factory runs the
 		// lister is simply empty and the counters carry no VPC names.
-		serveMetrics(ctx, mgr, factory.Sdn().V1alpha1().VPCs(), nodeName, metricsAddr, log)
+		serveMetrics(ctx, mgr, factory.Sdn().V1alpha1().VPCs(), cfg, nodeName, metricsAddr, metricsSecure, log)
 
 		register := func(context.Context) error {
 			watchVPCs(factory, mgr, log)
@@ -1938,8 +1943,11 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 // the PERCPU map and the VPC lister (net id -> VPC namespace/name). The agent is
 // hostNetwork, so addr decides which node addresses expose the counters: the
 // chart passes the node's primary InternalIP (via the downward API) so a public
-// secondary address serves nothing. Empty disables the endpoint.
-func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1informers.VPCInformer, nodeName, addr string, log *slog.Logger) {
+// secondary address serves nothing. Empty disables the endpoint. With secure,
+// the handler is wrapped in controller-runtime's delegated authn/authz filter
+// (TokenReview + SubjectAccessReview against the kube-apiserver), so a scraper
+// must present a token authorized for get on nonResourceURL /metrics.
+func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1informers.VPCInformer, cfg *rest.Config, nodeName, addr string, secure bool, log *slog.Logger) {
 	if addr == "" {
 		log.Info("metrics endpoint disabled (--metrics-bind-address empty)")
 		return
@@ -2072,11 +2080,34 @@ func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1in
 		_, _ = w.Write([]byte(b.String()))
 	})
 
+	// Delegated authn/authz, failing CLOSED: if the filter cannot be built, no
+	// metrics is strictly better than unauthenticated metrics on a hostNetwork
+	// listener.
+	var handler http.Handler = mux
+	if secure {
+		httpClient, err := rest.HTTPClientFor(cfg)
+		if err != nil {
+			log.Error("metrics auth: http client; endpoint stays off", "err", err)
+			return
+		}
+		filter, err := metricsfilters.WithAuthenticationAndAuthorization(cfg, httpClient)
+		if err != nil {
+			log.Error("metrics auth: build filter; endpoint stays off", "err", err)
+			return
+		}
+		if handler, err = filter(logr.FromSlogHandler(log.Handler()), mux); err != nil {
+			log.Error("metrics auth: wrap handler; endpoint stays off", "err", err)
+			return
+		}
+	} else {
+		log.Warn("metrics served without authentication (--metrics-secure=false)")
+	}
+
 	// ReadHeaderTimeout: without it a client that opens a connection and never
 	// finishes its request headers holds a goroutine forever, and this listener
 	// is on the node's own address (hostNetwork) where anything reachable can
 	// open one.
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
