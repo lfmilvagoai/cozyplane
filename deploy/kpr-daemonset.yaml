@@ -3,8 +3,9 @@
 # manifest for the kind e2e — do NOT apply on a cluster running full Cilium
 # (both claim the cgroup root and the /sys/fs/bpf pin namespace).
 #
-# RBAC is cluster-admin here to keep the prototype e2e free of whack-a-mole; a
-# scoped role (services/endpointslices/nodes read + cilium.io) is a follow-up.
+# RBAC is cluster-admin here to keep the prototype e2e free of whack-a-mole; the
+# scoped role lives in chart/cozyplane-kpr (no cilium.io — nothing kpr wires
+# reads or writes that group).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
