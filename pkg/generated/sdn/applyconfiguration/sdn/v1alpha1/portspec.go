@@ -60,6 +60,9 @@ type PortSpecApplyConfiguration struct {
 	// gateways[vni]; a forwarding port is not the VPC's door and must never be
 	// programmed as one. They happen to share a datapath flag, not a meaning.
 	Forwarding *bool `json:"forwarding,omitempty"`
+	// Primary is set by the CNI only for the default network attachment.
+	// A managed boundary denies Internet initiations on secondary legs.
+	Primary *bool `json:"primary,omitempty"`
 }
 
 // PortSpecApplyConfiguration constructs a declarative configuration of the PortSpec type for use with
@@ -137,5 +140,13 @@ func (b *PortSpecApplyConfiguration) WithGateway(value bool) *PortSpecApplyConfi
 // If called multiple times, the Forwarding field is set to the value of the last call.
 func (b *PortSpecApplyConfiguration) WithForwarding(value bool) *PortSpecApplyConfiguration {
 	b.Forwarding = &value
+	return b
+}
+
+// WithPrimary sets the Primary field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Primary field is set to the value of the last call.
+func (b *PortSpecApplyConfiguration) WithPrimary(value bool) *PortSpecApplyConfiguration {
+	b.Primary = &value
 	return b
 }

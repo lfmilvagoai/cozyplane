@@ -49,7 +49,36 @@ type VPCSpec struct {
 
 	// MTU is the MTU advertised to ports in this VPC. Zero selects the
 	// controller default.
-	MTU int32
+	MTU      int32
+	Boundary *VPCBoundary
+}
+
+// VPCBoundary is the operator-managed cross-VPC and Internet ceiling.
+type VPCBoundary struct {
+	Revision int64
+	Internet bool
+	Peers    []VPCBoundaryRule
+}
+
+// VPCBoundaryRule admits a directed initiation.
+type VPCBoundaryRule struct {
+	PeerRef   VPCRef
+	Direction string
+	Protocol  string
+	Ports     []int32
+	ICMPType  *int32
+	ICMPCode  *int32
+}
+
+// VPCBoundaryNode records successful programming by one current agent instance.
+type VPCBoundaryNode struct {
+	Node               string
+	AgentUID           string
+	Revision           int64
+	ObservedGeneration int64
+	PrimaryPortsDigest string
+	// TransportReady confirms that peer maps and routes are synchronized.
+	TransportReady bool
 }
 
 // VPCGatewayPhase is the lifecycle phase of a VPCGateway.
@@ -387,7 +416,8 @@ type VPCStatus struct {
 	Phase VPCPhase
 
 	// Conditions represent the latest available observations.
-	Conditions []metav1.Condition
+	Conditions    []metav1.Condition
+	BoundaryNodes []VPCBoundaryNode
 }
 
 // +genclient
@@ -548,6 +578,7 @@ type PortSpec struct {
 	// datapath as PORT_F_GATEWAY. DISTINCT from Gateway, which means "the VPC's
 	// .1 egress leg" and alone programs gateways[vni] (docs/multi-attach.md).
 	Forwarding bool
+	Primary    bool
 }
 
 // PortStatus is the controller-observed state of a Port.

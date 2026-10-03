@@ -14,6 +14,9 @@ metadata:
   labels:
     {{- include "cozyplane.labels" . | nindent 4 }}
 rules:
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch"]
   # vpcs: the "export" verb is the authority to create a forwarding grant on a
   # VPC (the VPCBinding admission checks it, sdnv1alpha1 vpcbinding strategy). The
   # managed VPNGateway controller creates that grant on the tenant's behalf, so it
@@ -136,8 +139,12 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Gateway Deployments for a VPCGateway family with no eBPF identity yet
-  # (one with addresses for every family is pure eBPF — docs/north-south.md §6a).
+  # VPCGateway Deployments live in the release namespace. The VPN controller
+  # also realizes Deployments and StatefulSets in tenant namespaces (PR #37),
+  # requiring these write verbs cluster-wide with the current shared account.
+  # The release Role below only documents the narrower VPCGateway requirement;
+  # it does not limit this ClusterRole. A separate VPN controller identity is
+  # required before these tenant workload privileges can be reduced safely.
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
@@ -163,6 +170,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cozyplane-controller
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-controller
+    namespace: {{ .Release.Namespace }}
+---
+# VPCGateway workload permissions scoped to the release namespace. The shared
+# account additionally has the tenant workload privileges required by VPN above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozyplane-controller-gateways
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozyplane-controller-gateways
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozyplane-controller-gateways
 subjects:
   - kind: ServiceAccount
     name: cozyplane-controller

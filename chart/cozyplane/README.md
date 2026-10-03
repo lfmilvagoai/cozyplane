@@ -2,9 +2,9 @@
 
 Packages cozyplane — a multi-tenant eBPF CNI (flat default network + VPC
 tenancy + VPC peering) — as the node agent DaemonSet, the controller
-Deployment, the `sdn.cozystack.io` API (as CRDs — the bootstrap surface),
-RBAC, and the VPCBinding `export` admission policy. The aggregated API server
-for the same group is the separate
+Deployment, the `local.sdn.cozystack.io` CRDs (underlay IPAM), RBAC, and the
+VPCBinding `export` admission policy. The tenant API is not here: the
+`sdn.cozystack.io` group is served only by the separate
 [cozyplane-apiserver](../cozyplane-apiserver) chart.
 
 cozyplane is the **primary CNI**. Install it on a cluster with no other CNI
@@ -28,12 +28,17 @@ for the tenancy model.
 helm install cozyplane ./chart/cozyplane --namespace cozy-cozyplane --create-namespace
 ```
 
-The `sdn.cozystack.io` API is served as CRDs, so tenancy works the moment the
-CNI lands — no cert-manager required. Installing the separate
-[cozyplane-apiserver](../cozyplane-apiserver) chart later switches the group to
-the aggregated API server (same group/version/kinds, transparent to clients):
-its explicit APIService atomically takes over the serving, and these CRDs stay
-installed, shadowed and inert.
+This chart installs the CNI and the `local.sdn.cozystack.io` group
+(`FabricIP` — underlay IPAM, which has to work before cert-manager, etcd and
+cozyplane's own apiserver, all of which are default-network pods).
+
+The tenant kinds — `VPC`, `Port`, `SecurityGroup`, `HostFirewall` and the rest of
+`sdn.cozystack.io` — have no CRDs and are served only by
+[cozyplane-apiserver](../cozyplane-apiserver), so install that chart too for
+tenancy. The two groups are deliberately separate: serving one group through
+both a CRD and an APIService collides the kube-apiserver's OpenAPI merge, after
+which `kubectl apply` fails for every object in the group. See
+[docs/api-groups.md](../../docs/api-groups.md).
 
 ## Configuration
 
@@ -47,8 +52,9 @@ most likely to set:
   `00-cozyplane.conflist` to sort ahead of a co-installed CNI (e.g. Cilium).
 - `genevePort` — override only to avoid a clash with another overlay on 6081.
 - `exportPolicy.enabled` — the VPCBinding export admission gate (needs k8s 1.30+).
-- `crds.enabled` — the CRD serving of the group (default true; disable only to
-  keep the group unserved until the cozyplane-apiserver chart installs).
+- `crds.enabled` — the `local.sdn.cozystack.io` CRDs (default true; disable
+  only if you install them out-of-band). It does not affect the tenant group,
+  which has no CRDs.
 - `egress.*` — cluster networking facts (pod/service CIDRs, cluster DNS) that
   drive node masquerade and the pool-less per-VPC egress gateway pod (a
   `VPCGateway` *with* a pool needs none -- its NAT is eBPF); add node/management networks to
@@ -60,8 +66,9 @@ most likely to set:
   and CNI binary installer, one per node.
 - `cozyplane-controller` (Deployment): assigns VNIs, reaps Ports on VPCBinding
   revocation, and maintains VPCPeering status.
-- The `sdn.cozystack.io` API: `vpcs`, `vpcbindings`, `vpcpeerings`, `ports` — as
-  CRDs (the aggregated server is [cozyplane-apiserver](../cozyplane-apiserver)).
+- The `local.sdn.cozystack.io` CRDs: `fabricips`. The tenant kinds
+  (`vpcs`, `ports`, `securitygroups`, …) are served by
+  [cozyplane-apiserver](../cozyplane-apiserver), not by this chart.
 - RBAC for both components, the aggregated tenant roles (`cozyplane-tenant-edit` /
   `-view`, docs/multitenancy.md), and the export
   ValidatingAdmissionPolicy.

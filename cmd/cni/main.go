@@ -896,6 +896,14 @@ func attachPort(ctx context.Context, client sdnclientset.Interface, r resolvedAt
 					"attachment %d requests ip %s but VM %q already holds pinned address %s on this interface",
 					r.Index, r.IP, vmName, p.Spec.IP)
 			}
+			if p.Spec.Primary != r.Primary() {
+				raw, _ := json.Marshal(map[string]any{"spec": map[string]any{"primary": r.Primary()}})
+				updated, err := client.SdnV1alpha1().Ports().Patch(ctx, p.Name, k8stypes.MergePatchType, raw, metav1.PatchOptions{})
+				if err != nil {
+					return nil, nil, nil, false, fmt.Errorf("persist primary attachment: %w", err)
+				}
+				p = updated
+			}
 			// Re-point the Port's pod identity at the pod binding it NOW. The
 			// {IP, MAC} stay pinned — that is the whole point of a persistent
 			// Port — but membership must follow the live launcher, or a migrated
@@ -935,6 +943,7 @@ func attachPort(ctx context.Context, client sdnclientset.Interface, r resolvedAt
 			// The forwarding grant, from the VPCBinding. Distinct from Gateway:
 			// this port is not the VPC's door (docs/multi-attach.md).
 			Forwarding: r.forwarding,
+			Primary:    r.Primary(),
 		}
 		if mac != nil {
 			spec.MAC = mac.String()

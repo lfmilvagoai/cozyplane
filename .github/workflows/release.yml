@@ -11,6 +11,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE_KPR: ghcr.io/${{ github.repository }}-kpr
 
 jobs:
   image:
@@ -27,6 +28,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # crane reads a published leg without running it. Pinned, and from the
+      # module proxy rather than a third-party action.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install crane
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -34,15 +45,23 @@ jobs:
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{raw}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      # Digest-reproducible (#4): no provenance/SBOM attestation manifests (they
-      # embed run metadata and land in the index, changing its digest every
-      # run), and rewrite-timestamp + SOURCE_DATE_EPOCH pin layer mtimes and the
-      # image-config timestamps, so the same source tree always produces the
-      # same index digest. Labels from metadata-action are dropped for the same
-      # reason (they embed the run's revision/created timestamps).
+      # Digest-reproducible on main (#4): rewrite-timestamp + SOURCE_DATE_EPOCH
+      # pin layer mtimes and the image-config timestamps, so the same source tree
+      # always produces the same index digest — which is what lets a pin commit
+      # rebuild to the digest it just pinned. Labels from metadata-action are
+      # dropped for the same reason (they embed the run's revision/created
+      # timestamps).
+      #
+      # Attestations are the one thing that cannot be both: a provenance or SBOM
+      # manifest embeds run metadata and lands in the index, so the digest moves
+      # every run and the pin loop never converges. They are therefore on for
+      # `v*` tags — a release is pinned as vX.Y.Z@sha256:… once, and never
+      # chased — and off for main, which is what dev clusters track.
+      # docs/packaging.md §3 has the reasoning.
       - id: build
         uses: docker/build-push-action@v6
         env:
@@ -52,10 +71,15 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           outputs: type=image,rewrite-timestamp=true,push=true
-          provenance: false
-          sbom: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          provenance: ${{ startsWith(github.ref, 'refs/tags/v') && 'mode=max' || 'false' }}
+          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          cache-from: type=gha,scope=cozyplane
+          cache-to: type=gha,mode=max,scope=cozyplane
+
+      # Each advertised leg must really be that architecture; it was not (the
+      # script says why).
+      - name: verify both legs are natively built
+        run: .github/scripts/verify-arch.sh '${{ env.IMAGE }}@${{ steps.build.outputs.digest }}' usr/local/bin/cozyplane-agent
 
       # The chart pins the image by digest; surface it so it's a copy-paste away.
       - name: report digest
@@ -68,4 +92,83 @@ jobs:
             echo "\`\`\`"
             echo ""
             echo "Pin it in \`chart/cozyplane/values.yaml\` (\`image:\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # cozyplane-kpr is a SEPARATE image from a separate module: it imports Cilium's
+  # load-balancer control plane, which the main cozyplane module never does
+  # (kpr/go.mod). Same triggers as the job above, so both images always exist for
+  # the same commit and the digest-pin loop converges for each.
+  kpr-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-qemu here, unlike the job above: kpr's builder stage is pinned
+      # to $BUILDPLATFORM and cross-compiles via GOARCH, and its final stage only
+      # COPYs — nothing ever executes under the target platform, so there is
+      # nothing to emulate. (Emulating Cilium's ~394-module build would be
+      # glacial, which is why the image had no CI job for so long.)
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # crane reads a published leg without running it. Pinned, and from the
+      # module proxy rather than a third-party action.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kpr/go.mod
+      - name: install crane
+        run: |
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_KPR }}
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Digest-reproducible, and attestations on tags only, on the same terms as
+      # the cozyplane image (#4); see the comment on that job. The build context
+      # is kpr/, so nothing outside that module reaches the image. A distinct
+      # cache scope keeps the two images from evicting each other's layers.
+      - id: build
+        uses: docker/build-push-action@v6
+        env:
+          SOURCE_DATE_EPOCH: 0
+        with:
+          context: kpr
+          file: kpr/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,rewrite-timestamp=true,push=true
+          provenance: ${{ startsWith(github.ref, 'refs/tags/v') && 'mode=max' || 'false' }}
+          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          cache-from: type=gha,scope=kpr
+          cache-to: type=gha,mode=max,scope=kpr
+
+      # Each advertised leg must really be that architecture; it was not (the
+      # script says why).
+      - name: verify both legs are natively built
+        run: .github/scripts/verify-arch.sh '${{ env.IMAGE_KPR }}@${{ steps.build.outputs.digest }}' usr/bin/cozyplane-kpr
+
+      - name: report digest
+        run: |
+          {
+            echo "## cozyplane-kpr image"
+            echo ""
+            echo "\`\`\`"
+            echo "${{ env.IMAGE_KPR }}@${{ steps.build.outputs.digest }}"
+            echo "\`\`\`"
+            echo ""
+            echo "Pin it in \`chart/cozyplane-kpr/values.yaml\` (\`image:\`)."
           } >> "$GITHUB_STEP_SUMMARY"

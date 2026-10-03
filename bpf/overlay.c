@@ -56,7 +56,7 @@ struct arp_eth {
 	__be32 tip;    // target IP
 } __attribute__((packed));
 
-// A 6-byte MAC in an 8-byte cell (the node uplink's, for the ARP responder).
+// A 6-byte MAC in an 8-byte cell.
 struct cozy_mac {
 	__u8 addr[6];
 	__u8 pad[2];
@@ -387,7 +387,7 @@ struct route_entry {
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
-	__type(value, struct route_entry);
+	__type(value, struct gw_entry);
 	__uint(max_entries, 1024);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } gateways SEC(".maps");
@@ -403,7 +403,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__type(key, struct lpm_key);
-	__type(value, struct gw_entry);
+	__type(value, struct route_entry);
 	__uint(max_entries, 4096);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -653,9 +653,13 @@ struct {
                              // floating-IP range when it differs from the
                              // default-route uplink (an OCI L2 VLAN). 0 = same
                              // link as CFG_UPLINK_IFINDEX (single-NIC default).
-                             // Floating egress redirects here; the ARP/NDP
-                             // responders answer with float_uplink_mac on it.
-#define CFG_FLOAT_NH       7 // v4 next-hop (network order) for floating egress
+                             // Read only by the v6 egress sites and lb_return's
+                             // v6/DSR fallback now; v4 selects per address
+                             // through ext_links.
+#define CFG_FLOAT_NH       7 // VESTIGIAL: no program reads it; ext_egress.nh carries
+                             // the per-link next-hop now. Still written, like
+                             // uplink_mac, because dropping a pinned cell's
+                             // writer is its own change
                              // out the floating uplink — the L2 fabric's virtual
                              // router. Needed because the kernel FIB routes
                              // off-subnet destinations via the *default* uplink,
@@ -691,8 +695,9 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } params SEC(".maps");
 
-// uplink_mac holds the node uplink's MAC (index 0), so from_uplink can put it in
-// the floating-IP ARP replies it crafts. Written by the agent at attach time.
+// uplink_mac holds the node uplink's MAC (index 0). Vestigial: no program reads
+// it; written only so the pinned map keeps its shape
+// (docs/lb-ingress.md § "Node-owned external addresses").
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
@@ -701,13 +706,48 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } uplink_mac SEC(".maps");
 
+// ext_links: which of this node's links can source a given external address —
+// a floating IP, a VPC NAT identity, an LB frontend on a reply. Keyed by the
+// address, so an LPM lookup on the one being stamped names the link to leave by:
+// a host key per external address, plus each link's subnet behind it. An address
+// routed to the node sits OUTSIDE its link's subnet, which is why the host key
+// exists and why the entry count follows addresses, not links.
+//
+// This replaces CFG_FLOAT_IFINDEX for v4 egress selection. That cell held one
+// answer for the node, and a node can carry external addresses on two links at
+// once (an L2 VLAN with an announced pool, plus cloud-NAT'd node addresses) —
+// whichever link won the cell, the other link's traffic left the wrong segment
+// with a source the fabric drops. The v6 paths still fall back to the cell,
+// because nothing writes v6 entries yet. See docs/lb-ingress.md § "The egress
+// link is a property of the address".
+//
+// A miss means no link claims the address: a routed pool, delivered to us from
+// elsewhere. The default uplink with a plain FIB lookup is the answer then, as
+// it always was.
+struct ext_egress {
+	__u32 ifindex;
+	__be32 nh;   // the link's router, for destinations off its subnet; 0 = ask the FIB
+	__be32 base; // the link's subnet, to tell those destinations apart
+	__be32 mask;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__type(key, struct lpm_key);
+	__type(value, struct ext_egress);
+	// Two keys per external address, so this follows the address budget rather
+	// than the link count; `floating` holds 65536 of the same population.
+	__uint(max_entries, 8192);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+} ext_links SEC(".maps");
+
 // float_uplink_mac: the *floating* uplink's MAC, when floating traffic rides a
 // different link than the default route (CFG_FLOAT_IFINDEX set) — e.g. an OCI
 // L2 VLAN carrying the floating range, while the default route (and the
-// cluster-egress masquerade) stays on the native, spoof-guarded NIC. The ARP/NDP
-// responders answer with this MAC for requests arriving on that link. A separate
-// one-cell map (not uplink_mac[1]) so the pinned uplink_mac keeps its shape
-// across upgrades.
+// cluster-egress masquerade) stays on the native, spoof-guarded NIC. Vestigial,
+// like uplink_mac above. A separate one-cell map (not
+// uplink_mac[1]) so the pinned uplink_mac keeps its shape across upgrades.
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
@@ -717,11 +757,9 @@ struct {
 } float_uplink_mac SEC(".maps");
 
 // float_net: the floating uplink's v4 subnet (base and mask, network order).
-// Floating egress needs it to pick the right neighbour: an ON-subnet
-// destination is resolved directly (the FIB's on-link route does that with a
-// plain redirect), while an OFF-subnet one must go via CFG_FLOAT_NH — the L2
-// fabric's virtual router, which forwards out of the VLAN but does NOT hairpin
-// intra-subnet traffic back in (OCI drops it).
+// VESTIGIAL: no program reads it. ext_egress.base/mask carry the same on- vs
+// off-subnet test, per link instead of per node. Still written, like uplink_mac,
+// because dropping a PIN_BY_NAME map strands a pin on every upgraded node.
 struct float_net {
 	__be32 base;
 	__be32 mask;
@@ -1872,6 +1910,13 @@ struct svc_rev_val {
 	__u16 vport;
 	__u16 lb; // 1: DNAT'd at from_uplink (LB ingress) — the client is external
 	          // and the reply exits by the uplink at the backend's from_pod
+	// The link the request arrived on, so the reply leaves by the same one.
+	// CFG_FLOAT_IFINDEX cannot answer this: it holds ONE link for the node, and
+	// a node can carry external addresses on two (an L2 VLAN with a MetalLB
+	// pool on one, cloud-NAT'd node addresses on the other) — the reply then
+	// left the wrong segment with a source the fabric drops. 0 when the arrival
+	// link is not a usable answer (the DSR path arrives over the overlay).
+	__u32 ifindex;
 };
 
 struct {
@@ -1895,6 +1940,34 @@ static __always_inline __u32 cfg(__u32 idx)
 
 // A fully-specified scoped LPM lookup: 32 scope bits + 128 address bits.
 #define LPM_FULL 160
+
+// ext_link_of returns the entry for an external source address, or NULL when no
+// link claims it. The value points into the map, so callers copy what they need
+// before any packet store: a store invalidates it.
+static __always_inline struct ext_egress *ext_link_of(const struct addr128 *src)
+{
+	struct lpm_key k = { .prefixlen = LPM_FULL, .scope_net = 0, .addr = *src };
+	return bpf_map_lookup_elem(&ext_links, &k);
+}
+
+// ext_redirect sends a packet out an external link. ON that link's subnet the
+// destination is its own neighbour and the FIB resolves it; OFF it the link's
+// router must be named, because a plain lookup would return the DEFAULT link's
+// gateway — the wrong neighbour for this one. nh 0 means no router is known
+// (a routed pool on the default uplink), so the FIB answers.
+static __always_inline int ext_redirect(struct __sk_buff *skb, __u32 uplink,
+					__be32 nh, __be32 base, __be32 mask)
+{
+	if (!nh)
+		return bpf_redirect_neigh(uplink, NULL, 0, 0);
+	__be32 dip = 0;
+	bpf_skb_load_bytes(skb, IP_DADDR_OFF, &dip, 4);
+	if (mask && (dip & mask) == base)
+		return bpf_redirect_neigh(uplink, NULL, 0, 0);
+	struct bpf_redir_neigh rn = { .nh_family = AF_INET };
+	rn.ipv4_nh = nh;
+	return bpf_redirect_neigh(uplink, &rn, sizeof(rn), 0);
+}
 
 // net_of resolves an address to a network id *as seen from* a scope network:
 // the destination's net from the source's scope (from_pod), or the source's
@@ -2173,13 +2246,17 @@ static __always_inline void nat_icmp_id(struct __sk_buff *skb, __u16 old, __u16 
 // pod's client is masqueraded to it, so the pod's reply comes back to from_pod.
 #define LINK_LOCAL_GW6 { { 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } }
 
+// Two u64 compares folded into one branch, not a byte loop: an early-return
+// loop leaves the verifier a separate fall-through state per byte, and each one
+// re-explores everything after the call. memcpy because addr128 is byte-aligned.
 static __always_inline int addr128_eq(const struct addr128 *a, const struct addr128 *b)
 {
-#pragma unroll
-	for (int i = 0; i < 16; i++)
-		if (a->b[i] != b->b[i])
-			return 0;
-	return 1;
+	__u64 a0, a1, b0, b1;
+	__builtin_memcpy(&a0, a->b, 8);
+	__builtin_memcpy(&a1, a->b + 8, 8);
+	__builtin_memcpy(&b0, b->b, 8);
+	__builtin_memcpy(&b1, b->b + 8, 8);
+	return ((a0 ^ b0) | (a1 ^ b1)) == 0;
 }
 
 // l4_ports6 reads the TCP/UDP ports of an IPv6 frame (fixed 40-byte header).
@@ -3050,12 +3127,19 @@ static __always_inline int floating_egress_snat(struct __sk_buff *skb, struct ip
 	// Ungrouped pods, replies (SYN-gated) and ICMP pass inside ns_egress_ok.
 	if (!ns_egress_ok(skb, net, 0, proto, src128, dst128))
 		return TC_ACT_SHOT;
-	// Floating egress leaves by the floating uplink (the link that carries the
-	// public range) — only there is the public source a valid address for the
-	// wire. Falls back to the default uplink when they are the same link.
-	__u32 uplink = cfg(CFG_FLOAT_IFINDEX);
-	if (!uplink)
-		uplink = cfg(CFG_UPLINK_IFINDEX);
+	// Floating egress leaves by the link that carries the public address — only
+	// there is that source valid for the wire.
+	__u32 uplink;
+	__be32 xnh = 0, xbase = 0, xmask = 0;
+	struct ext_egress *xl = ext_link_of(public_ip);
+	if (xl) {
+		uplink = xl->ifindex;
+		xnh = xl->nh;
+		xbase = xl->base;
+		xmask = xl->mask; // copied: a packet store invalidates the map value
+	} else {
+		uplink = cfg(CFG_UPLINK_IFINDEX); // no link claims it: a routed pool
+	}
 	if (!uplink)
 		return FLOAT_MISS;
 	__u32 pub = v4_of_128(public_ip), osrc = ip->saddr; // copied: stores invalidate ip
@@ -3082,19 +3166,7 @@ static __always_inline int floating_egress_snat(struct __sk_buff *skb, struct ip
 	// OFF it the agent-supplied virtual router is — the FIB would route via
 	// the *default* link's gateway, the wrong neighbour for this uplink, and
 	// the virtual router won't hairpin intra-subnet traffic back in.
-	__u32 nh = cfg(CFG_FLOAT_NH);
-	if (nh) {
-		__u32 zero = 0;
-		struct float_net *fn = bpf_map_lookup_elem(&float_net, &zero);
-		__be32 dip = 0;
-		bpf_skb_load_bytes(skb, IP_DADDR_OFF, &dip, 4);
-		if (fn && fn->mask && (dip & fn->mask) == fn->base)
-			return bpf_redirect_neigh(uplink, NULL, 0, 0); // on-subnet: dst is the neighbour
-		struct bpf_redir_neigh rn = { .nh_family = AF_INET };
-		rn.ipv4_nh = nh;
-		return bpf_redirect_neigh(uplink, &rn, sizeof(rn), 0);
-	}
-	return bpf_redirect_neigh(uplink, NULL, 0, 0);
+	return ext_redirect(skb, uplink, xnh, xbase, xmask);
 }
 
 // encap_lb: encapsulate an LB/NodePort flow to a remote backend's node at
@@ -3163,9 +3235,18 @@ static __always_inline int vpc_nat_snat(struct __sk_buff *skb, struct pkt *p, __
 	__u32 osrc = ip->saddr;
 	__u8 proto = ip->protocol;
 
-	__u32 uplink = cfg(CFG_FLOAT_IFINDEX);
-	if (!uplink)
-		uplink = cfg(CFG_UPLINK_IFINDEX);
+	// The link that can source this address, not a node-wide guess.
+	__u32 uplink;
+	__be32 xnh = 0, xbase = 0, xmask = 0;
+	struct ext_egress *xl = ext_link_of(&nat->ip);
+	if (xl) {
+		uplink = xl->ifindex;
+		xnh = xl->nh;
+		xbase = xl->base;
+		xmask = xl->mask; // copied: a packet store invalidates the map value
+	} else {
+		uplink = cfg(CFG_UPLINK_IFINDEX); // no link claims it: a routed pool
+	}
 	if (!uplink)
 		return NAT_MISS;
 
@@ -3193,7 +3274,7 @@ static __always_inline int vpc_nat_snat(struct __sk_buff *skb, struct pkt *p, __
 		nat_addr(skb, proto, IP_SADDR_OFF, osrc, v4_of_128(&nat->ip));
 		nat_icmp_id(skb, id, gw_id);
 		count_ns(net, skb->len, NS_GW, 0);
-		return bpf_redirect_neigh(uplink, NULL, 0, 0);
+		return ext_redirect(skb, uplink, xnh, xbase, xmask);
 	}
 
 	__u16 sport, dport;
@@ -3219,7 +3300,7 @@ static __always_inline int vpc_nat_snat(struct __sk_buff *skb, struct pkt *p, __
 	nat_port(skb, proto, L4_SPORT_OFF, sport, gw_port);
 	// The VPC's egress, through its own boundary, wearing its own address.
 	count_ns(net, skb->len, NS_GW, 0);
-	return bpf_redirect_neigh(uplink, NULL, 0, 0);
+	return ext_redirect(skb, uplink, xnh, xbase, xmask);
 }
 
 // vpc_nat_reverse: the reply half. A packet addressed to a VPC's NAT address
@@ -3534,10 +3615,14 @@ static __always_inline int floating_egress_snat6(struct __sk_buff *skb, struct p
 	// SG egress gates a floating pod's off-VPC traffic (the v4 twin's rationale).
 	if (!ns_egress_ok(skb, net, 1, proto, p->src, p->dst))
 		return TC_ACT_SHOT;
-	// Same floating-uplink selection as the v4 path. No explicit v6 next-hop
-	// yet (CFG_FLOAT_NH is a v4 cell): on a distinct floating uplink, v6
-	// off-subnet egress still resolves via the FIB — revisit with v6 floating.
-	__u32 uplink = cfg(CFG_FLOAT_IFINDEX);
+	// The link that can source this address. ext_links is v4-only today:
+	// EnsureFloatingUplink returns early for a v6 address, so nothing writes a
+	// v6 entry, which leaves the node-wide cell as the v6 answer until v6
+	// floating-uplink selection exists. Dropping straight to the default uplink
+	// here would move v6 egress off a secondary link that currently carries it.
+	// No v6 next-hop cell either: the FIB resolves the neighbour on that link.
+	struct ext_egress *xl = ext_link_of(public_ip);
+	__u32 uplink = xl ? xl->ifindex : cfg(CFG_FLOAT_IFINDEX);
 	if (!uplink)
 		uplink = cfg(CFG_UPLINK_IFINDEX);
 	if (!uplink)
@@ -3734,7 +3819,14 @@ static __always_inline int vpc_nat_snat6(struct __sk_buff *skb, struct pkt *p, _
 		return TC_ACT_SHOT; // SG egress, the same gate the gateway path applies
 	__u32 pb = nat->port_base, ps = nat->port_span;
 
-	__u32 uplink = cfg(CFG_FLOAT_IFINDEX);
+	// The link that can source this address. ext_links is v4-only today:
+	// EnsureFloatingUplink returns early for a v6 address, so nothing writes a
+	// v6 entry, which leaves the node-wide cell as the v6 answer until v6
+	// floating-uplink selection exists. Dropping straight to the default uplink
+	// here would move v6 egress off a secondary link that currently carries it.
+	// No v6 next-hop cell either: the FIB resolves the neighbour on that link.
+	struct ext_egress *xl = ext_link_of(&natip);
+	__u32 uplink = xl ? xl->ifindex : cfg(CFG_FLOAT_IFINDEX);
 	if (!uplink)
 		uplink = cfg(CFG_UPLINK_IFINDEX);
 	if (!uplink)
@@ -4083,7 +4175,29 @@ static __always_inline int lb_return(struct __sk_buff *skb, struct pkt *p, __u32
 	// (docs/north-south.md).
 	count_ns(srcnet, skb->len, NS_LB, 0);
 
-	__u32 uplink = cfg(CFG_FLOAT_IFINDEX);
+	// The flow's own arrival link is the most exact answer: it is right even for
+	// an address no link's subnet covers. A DSR flow arrived over the overlay
+	// and has none, so it falls back to the frontend address's own link — which
+	// is the first correct answer those flows have had.
+	__u32 uplink = rv->ifindex;
+	__be32 xnh = 0, xbase = 0, xmask = 0;
+	struct ext_egress *xl = ext_link_of(&rv->vip);
+	if (xl) {
+		if (!uplink)
+			uplink = xl->ifindex;
+		// The router belongs to that link; name it only if we leave by it.
+		if (uplink == xl->ifindex) {
+			xnh = xl->nh;
+			xbase = xl->base;
+			xmask = xl->mask; // copied: a packet store invalidates the value
+		}
+	}
+	// The node-wide cell before the default uplink, matching the v6 egress
+	// sites: lb_return serves both families, ext_links has no v6 entries, and a
+	// v6 DSR reply has no arrival link either — dropping straight to the default
+	// uplink would move it off a secondary link that currently carries it.
+	if (!uplink)
+		uplink = cfg(CFG_FLOAT_IFINDEX);
 	if (!uplink)
 		uplink = cfg(CFG_UPLINK_IFINDEX);
 	if (!uplink)
@@ -4101,19 +4215,7 @@ static __always_inline int lb_return(struct __sk_buff *skb, struct pkt *p, __u32
 	if (sport != rv->vport)
 		nat_port(skb, p->proto, L4_SPORT_OFF, sport, rv->vport);
 
-	__u32 nh = cfg(CFG_FLOAT_NH);
-	if (nh) {
-		__u32 zero = 0;
-		struct float_net *fn = bpf_map_lookup_elem(&float_net, &zero);
-		__be32 dip = 0;
-		bpf_skb_load_bytes(skb, IP_DADDR_OFF, &dip, 4);
-		if (fn && fn->mask && (dip & fn->mask) == fn->base)
-			return bpf_redirect_neigh(uplink, NULL, 0, 0); // on-subnet: dst is the neighbour
-		struct bpf_redir_neigh rn = { .nh_family = AF_INET };
-		rn.ipv4_nh = nh;
-		return bpf_redirect_neigh(uplink, &rn, sizeof(rn), 0);
-	}
-	return bpf_redirect_neigh(uplink, NULL, 0, 0);
+	return ext_redirect(skb, uplink, xnh, xbase, xmask);
 }
 
 // Per-CPU scratch for lb_ingress: the svc/ct keys and values are ~200 bytes
@@ -4147,7 +4249,7 @@ struct {
 // else affected).
 struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-	__uint(max_entries, 4); // 0: lb_ingress (from_uplink), 1: lb_dsr
+	__uint(max_entries, 6); // 0: lb_ingress (from_uplink), 1: lb_dsr
 	                        // (from_overlay), 2: hf_ingress (host firewall,
 	                        // every host-stack fall-through), 3: hf_egress
 	                        // (node -> remote pod, from_pod's remotes hit)
@@ -4335,6 +4437,7 @@ int cozyplane_lb_ingress(struct __sk_buff *skb)
 		s->rv.vip = p.dst;
 		s->rv.vport = dport;
 		s->rv.lb = 1;
+		s->rv.ifindex = skb->ingress_ifindex;
 		asm volatile("" ::: "memory");
 		bpf_map_update_elem(&svc_rev, &s->rk, &s->rv, BPF_ANY);
 	}
@@ -4593,6 +4696,9 @@ int cozyplane_lb_dsr(struct __sk_buff *skb)
 		s->rv.vip = lopt.vip;
 		s->rv.vport = lopt.vport;
 		s->rv.lb = 1;
+		// Arrived encapsulated: ingress_ifindex is the geneve device, not an
+		// uplink, so leave it unset and fall back to the node-wide slot.
+		s->rv.ifindex = 0;
 		asm volatile("" ::: "memory");
 		bpf_map_update_elem(&svc_rev, &s->rk, &s->rv, BPF_ANY);
 	}
@@ -4620,13 +4726,13 @@ int cozyplane_lb_dsr(struct __sk_buff *skb)
 
 #define DNS_MISS -1
 
+// One branch, not sixteen -- see addr128_eq.
 static __always_inline int addr128_zero(const struct addr128 *a)
 {
-#pragma unroll
-	for (int i = 0; i < 16; i++)
-		if (a->b[i])
-			return 0;
-	return 1;
+	__u64 a0, a1;
+	__builtin_memcpy(&a0, a->b, 8);
+	__builtin_memcpy(&a1, a->b + 8, 8);
+	return (a0 | a1) == 0;
 }
 
 // dns_steer: from_pod's forward half. Called only for a non-gateway VPC pod
@@ -4772,8 +4878,243 @@ static __always_inline int dns_return(struct __sk_buff *skb, struct pkt *p)
 	return TC_ACT_OK;
 }
 
+// Managed VPC boundaries have their own maps and state. They are deliberately
+// separate from additive tenant SGs and run before any NAT/Service return path.
+struct boundary_policy { __u64 revision; __u64 identity; __u32 internet; __u32 pad; };
+struct boundary_rule { __u64 revision; __u32 net; __u32 peer; __u16 port; __u8 proto; __u8 direction; __u32 pad; };
+struct boundary_flow {
+	struct addr128 src; struct addr128 dst;
+	__u32 local; __u32 peer;
+	__u16 sport; __u16 dport; __u8 proto; __u8 hook; __u16 pad;
+};
+struct boundary_flow_value { __u64 local_rev; __u64 peer_rev; __u64 local_id; __u64 peer_id; __u64 expires; };
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH); __type(key, __u32); __type(value, struct boundary_policy);
+	__uint(max_entries, 16384); __uint(pinning, LIBBPF_PIN_BY_NAME);
+} boundary_policy SEC(".maps");
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH); __type(key, struct boundary_rule); __type(value, __u8);
+	__uint(max_entries, 131072); __uint(pinning, LIBBPF_PIN_BY_NAME);
+} boundary_rules SEC(".maps");
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH); __type(key, struct boundary_flow); __type(value, struct boundary_flow_value);
+	__uint(max_entries, 262144); __uint(pinning, LIBBPF_PIN_BY_NAME);
+} boundary_ct SEC(".maps");
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH); __type(key, struct local_key); __type(value, __u8);
+	__uint(max_entries, 65536); __uint(pinning, LIBBPF_PIN_BY_NAME);
+} boundary_primary SEC(".maps");
+struct boundary_cidr { __u32 prefixlen; struct addr128 addr; };
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE); __type(key, struct boundary_cidr); __type(value, __u8);
+	__uint(max_entries, 32768); __uint(map_flags, BPF_F_NO_PREALLOC); __uint(pinning, LIBBPF_PIN_BY_NAME);
+} boundary_cidrs SEC(".maps");
+struct boundary_scratch {
+	struct pkt packet;
+	struct boundary_flow key; struct boundary_flow reverse;
+	struct boundary_flow_value value; struct boundary_rule rule;
+	struct boundary_cidr cidr; struct local_key endpoint;
+};
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY); __type(key, __u32); __type(value, struct boundary_scratch);
+	__uint(max_entries, 1);
+} boundary_scratch SEC(".maps");
+
+// Only ordinary unfragmented IP is supported by the managed L4 boundary.
+// Reject options/extension chains and fragments rather than reading guessed L4.
+static __always_inline int boundary_l4(struct __sk_buff *skb, struct boundary_scratch *s)
+{
+	__u32 off = ETH_HLEN + (s->packet.is_v6 ? 40 : 20);
+	if (!s->packet.is_v6) {
+		__u8 vihl; __u16 frag;
+		if (bpf_skb_load_bytes(skb, ETH_HLEN, &vihl, 1) < 0 || vihl != 0x45 ||
+		    bpf_skb_load_bytes(skb, ETH_HLEN + 6, &frag, 2) < 0 ||
+		    (bpf_ntohs(frag) & 0x3fff)) return 0;
+	}
+	s->key.proto = s->packet.proto;
+	if (s->packet.proto == IPPROTO_TCP || s->packet.proto == IPPROTO_UDP) {
+		if (bpf_skb_load_bytes(skb, off, &s->key.sport, 2) < 0 ||
+		    bpf_skb_load_bytes(skb, off + 2, &s->key.dport, 2) < 0) return 0;
+		return 1;
+	}
+	if (s->packet.proto == IPPROTO_ICMP || s->packet.proto == IPPROTO_ICMPV6) {
+		// Keep the exact type/code in the CT tuple and rule key. Echo also
+		// carries its identifier, preventing one ping from admitting another.
+		if (bpf_skb_load_bytes(skb, off, &s->key.dport, 2) < 0 ||
+		    bpf_skb_load_bytes(skb, off + 4, &s->key.sport, 2) < 0) return 0;
+		return 1;
+	}
+	return 0;
+}
+
+// Error quotations are not fresh initiations. Only the opposite hook's existing
+// flow may admit one; inspecting a quote must never create or refresh flow state.
+// Returns -1 for a non-error message, otherwise an exact related-flow verdict.
+static __attribute__((noinline)) int boundary_related_error(struct __sk_buff *skb,
+							   struct boundary_scratch *s)
+{
+	__u16 tc = bpf_ntohs(s->key.dport);
+	__u8 type = tc >> 8, code = tc & 0xff;
+	if (s->key.proto == IPPROTO_ICMP && !s->packet.is_v6) {
+		if (type != 3 && type != 11 && type != 12) return -1;
+		if ((type == 3 && code > 15) || (type == 11 && code > 1) ||
+		    (type == 12 && code > 2)) return 0;
+	} else if (s->key.proto == IPPROTO_ICMPV6 && s->packet.is_v6) {
+		if (type >= 128) return -1;
+		// RFC 4443's four error formats and their defined codes.
+		if (type < 1 || type > 4 || (type == 1 && code > 6) ||
+		    (type == 2 && code) || (type == 3 && code > 1) ||
+		    (type == 4 && code > 2)) return 0;
+	} else return -1;
+
+	__u32 quoted = ETH_HLEN + (s->packet.is_v6 ? 40 : 20) + 8;
+	__u8 version, proto, l4[8];
+	if (bpf_skb_load_bytes(skb, quoted, &version, 1) < 0) return 0;
+	s->reverse = s->key;
+	s->reverse.hook = !s->key.hook;
+	if (s->packet.is_v6) {
+		if ((version >> 4) != 6 ||
+		    bpf_skb_load_bytes(skb, quoted + 6, &proto, 1) < 0 ||
+		    bpf_skb_load_bytes(skb, quoted + 8, &s->reverse.src, 16) < 0 ||
+		    bpf_skb_load_bytes(skb, quoted + 24, &s->reverse.dst, 16) < 0)
+			return 0;
+		quoted += 40;
+	} else {
+		__u16 frag;
+		__u32 src, dst;
+		if (version != 0x45 ||
+		    bpf_skb_load_bytes(skb, quoted + 6, &frag, 2) < 0 ||
+		    (bpf_ntohs(frag) & 0x3fff) ||
+		    bpf_skb_load_bytes(skb, quoted + 9, &proto, 1) < 0 ||
+		    bpf_skb_load_bytes(skb, quoted + 12, &src, 4) < 0 ||
+		    bpf_skb_load_bytes(skb, quoted + 16, &dst, 4) < 0)
+			return 0;
+		v4_to_128(&s->reverse.src, src);
+		v4_to_128(&s->reverse.dst, dst);
+		quoted += 20;
+	}
+	// An error belongs to the quoted sender, never another endpoint in its VPC.
+	if (!addr128_eq(&s->reverse.src, &s->packet.dst) ||
+	    bpf_skb_load_bytes(skb, quoted, l4, sizeof(l4)) < 0) return 0;
+	s->reverse.proto = proto;
+	if (proto == IPPROTO_TCP || proto == IPPROTO_UDP) {
+		__builtin_memcpy(&s->reverse.sport, l4, 2);
+		__builtin_memcpy(&s->reverse.dport, l4 + 2, 2);
+	} else if ((!s->packet.is_v6 && proto == IPPROTO_ICMP &&
+		    (l4[0] == 8 || l4[0] == 0) && !l4[1]) ||
+		   (s->packet.is_v6 && proto == IPPROTO_ICMPV6 &&
+		    (l4[0] == 128 || l4[0] == 129) && !l4[1])) {
+		__builtin_memcpy(&s->reverse.dport, l4, 2);
+		__builtin_memcpy(&s->reverse.sport, l4 + 4, 2);
+	} else return 0; // no extension chains, fragments or nested error quotations
+	struct boundary_flow_value *ct = bpf_map_lookup_elem(&boundary_ct, &s->reverse);
+	if (!ct || ct->local_rev != s->value.local_rev ||
+	    ct->peer_rev != s->value.peer_rev || ct->local_id != s->value.local_id ||
+	    ct->peer_id != s->value.peer_id || ct->expires <= bpf_ktime_get_ns()) return 0;
+	return 1;
+}
+
+static __attribute__((noinline)) int boundary_gate(struct __sk_buff *skb, struct boundary_scratch *s)
+{
+	struct boundary_policy *local = bpf_map_lookup_elem(&boundary_policy, &s->key.local);
+	struct boundary_policy *peer = bpf_map_lookup_elem(&boundary_policy, &s->key.peer);
+	// Materialize scalar presence: LLVM must not combine map pointers with OR,
+	// an operation forbidden by the kernel verifier.
+	volatile __u8 local_present = local != 0;
+	volatile __u8 peer_present = peer != 0;
+	if (!local_present && !peer_present) return 1; // legacy VPCs retain existing behavior
+	if (!local || !local->revision) return 0;
+	if (s->key.local == s->key.peer) return 1; // tenant SGs govern within a VPC
+	if (!boundary_l4(skb, s)) return 0;
+	if (!s->key.peer) {
+		// North-south delivery keeps existing ingress gates. Outbound Internet
+		// requires both a VPC grant and an authenticated primary attachment.
+		if (s->key.hook) return 1;
+		s->cidr.prefixlen = 128; s->cidr.addr = s->packet.dst;
+		if (bpf_map_lookup_elem(&boundary_cidrs, &s->cidr)) return 0;
+		s->endpoint.net = s->key.local; s->endpoint.ip = s->packet.src;
+		return local->internet && bpf_map_lookup_elem(&boundary_primary, &s->endpoint);
+	}
+	if (!peer || !peer->revision) return 0;
+	s->value.local_rev = local->revision; s->value.peer_rev = peer->revision;
+	s->value.local_id = local->identity; s->value.peer_id = peer->identity;
+	if (s->key.proto == IPPROTO_ICMP || s->key.proto == IPPROTO_ICMPV6) {
+		int related = boundary_related_error(skb, s);
+		if (related >= 0) return related;
+	}
+	struct boundary_flow_value *ct = bpf_map_lookup_elem(&boundary_ct, &s->key);
+	__u64 now = bpf_ktime_get_ns();
+	if (ct && ct->local_rev == s->value.local_rev && ct->peer_rev == s->value.peer_rev &&
+	    ct->local_id == s->value.local_id && ct->peer_id == s->value.peer_id && ct->expires > now) {
+		ct->expires = now + 30000000000ULL;
+		return 1;
+	}
+	// ACK/data without tracked authorization cannot initiate a TCP flow.
+	if (s->key.proto == IPPROTO_TCP) {
+		__u8 flags;
+		__u32 off = ETH_HLEN + (s->packet.is_v6 ? 40 : 20);
+		if (bpf_skb_load_bytes(skb, off + 13, &flags, 1) < 0 ||
+		    !(flags & 2) || (flags & (0x10 | 0x04 | 0x01))) return 0;
+	}
+	s->rule.revision = s->value.local_rev; s->rule.net = s->key.local;
+	s->rule.peer = s->key.peer; s->rule.proto = s->key.proto;
+	s->rule.port = s->key.dport; s->rule.direction = s->key.hook;
+	if (!bpf_map_lookup_elem(&boundary_rules, &s->rule)) return 0;
+	s->rule.revision = s->value.peer_rev; s->rule.net = s->key.peer;
+	s->rule.peer = s->key.local; s->rule.direction = !s->key.hook;
+	if (!bpf_map_lookup_elem(&boundary_rules, &s->rule)) return 0;
+	s->value.expires = now + 30000000000ULL;
+	if (bpf_map_update_elem(&boundary_ct, &s->key, &s->value, BPF_ANY) < 0) return 0;
+	s->reverse = s->key; s->reverse.src = s->key.dst; s->reverse.dst = s->key.src;
+	s->reverse.hook = !s->key.hook;
+	if (s->key.proto == IPPROTO_TCP || s->key.proto == IPPROTO_UDP) {
+		s->reverse.sport = s->key.dport; s->reverse.dport = s->key.sport;
+	} else {
+		__u16 tc = bpf_ntohs(s->key.dport);
+		if (s->key.proto == IPPROTO_ICMP && tc == 0x0800) s->reverse.dport = 0;
+		else if (s->key.proto == IPPROTO_ICMPV6 && tc == 0x8000) s->reverse.dport = bpf_htons(0x8100);
+		else return 1; // only echo has a defined automatic reply pair
+	}
+	return bpf_map_update_elem(&boundary_ct, &s->reverse, &s->value, BPF_ANY) == 0;
+}
+
 SEC("tc")
 int cozyplane_from_pod(struct __sk_buff *skb)
+{
+	__u32 zero = 0, net = 0;
+	__u32 ifindex = skb->ifindex;
+	__u32 *port = bpf_map_lookup_elem(&ports, &ifindex);
+	if (port) net = PORT_NET(*port);
+	struct boundary_scratch *s = bpf_map_lookup_elem(&boundary_scratch, &zero);
+	if (!s) return TC_ACT_SHOT;
+	__builtin_memset(s, 0, sizeof(*s));
+	if (net && parse_ip(skb, &s->packet) == 0) {
+		s->key.local = net; s->key.peer = net_of(&networks, net, s->packet.dst);
+		s->key.src = s->packet.src; s->key.dst = s->packet.dst;
+		struct boundary_policy *bp = bpf_map_lookup_elem(&boundary_policy, &net);
+		struct boundary_policy *peer_policy = bpf_map_lookup_elem(&boundary_policy, &s->key.peer);
+		if (!bp && peer_policy) return TC_ACT_SHOT;
+		if (bp && !(port && (*port & PORT_F_GATEWAY))) {
+			struct endpoint *self = local_of(net, s->packet.src);
+			if (!self || self->ifindex != skb->ifindex) return TC_ACT_SHOT;
+			struct addr128 gw4, gw6 = LINK_LOCAL_GW6;
+			v4_to_128(&gw4,bpf_htonl(LINK_LOCAL_GW));
+			int plumbing = addr128_eq(&s->packet.dst, &gw4) || addr128_eq(&s->packet.dst, &gw6) ||
+				(s->packet.is_v6 && v6_link_scoped(&s->packet.dst));
+			__u32 family = s->packet.is_v6;
+			struct addr128 *dns = bpf_map_lookup_elem(&dns_ips, &family);
+			if (!plumbing && dns && addr128_eq(dns, &s->packet.dst) &&
+			    (s->packet.proto == IPPROTO_TCP || s->packet.proto == IPPROTO_UDP) && boundary_l4(skb, s) &&
+			    s->key.dport == bpf_htons(53)) plumbing = 1;
+			if (!plumbing && !boundary_gate(skb, s)) return TC_ACT_SHOT;
+		}
+	}
+	bpf_tail_call(skb, &lb_prog, 4);
+	return TC_ACT_SHOT; // no continuation means no enforcement-ready dataplane
+}
+
+SEC("tc")
+int cozyplane_from_pod_continue(struct __sk_buff *skb)
 {
 	struct pkt p;
 	if (parse_ip(skb, &p) < 0)
@@ -5228,6 +5569,27 @@ int cozyplane_from_pod(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_to_pod(struct __sk_buff *skb)
 {
+	__u32 zero = 0, net = 0;
+	__u32 ifindex = skb->ifindex;
+	__u32 *port = bpf_map_lookup_elem(&ports, &ifindex);
+	if (port) net = PORT_NET(*port);
+	struct boundary_scratch *s = bpf_map_lookup_elem(&boundary_scratch, &zero);
+	if (!s) return TC_ACT_SHOT;
+	__builtin_memset(s, 0, sizeof(*s));
+	if (net && parse_ip(skb, &s->packet) == 0) {
+		s->key.local = net; s->key.peer = net_of(&networks, net, s->packet.src);
+		s->key.src = s->packet.src; s->key.dst = s->packet.dst; s->key.hook = 1;
+		if (bpf_map_lookup_elem(&boundary_policy, &net) &&
+		    (skb->mark & FWD_MARK)) return TC_ACT_SHOT;
+		if (!boundary_gate(skb, s)) return TC_ACT_SHOT;
+	}
+	bpf_tail_call(skb, &lb_prog, 5);
+	return TC_ACT_SHOT;
+}
+
+SEC("tc")
+int cozyplane_to_pod_continue(struct __sk_buff *skb)
+{
 	struct pkt p;
 	if (parse_ip(skb, &p) < 0)
 		return TC_ACT_OK;
@@ -5389,7 +5751,9 @@ int cozyplane_to_pod(struct __sk_buff *skb)
 	// every grouped source (the off-VPC dst is ungrouped) and break all TCP/UDP
 	// north-south egress. A normal east-west delivery always has an in-VPC dst.
 	int ns_transit = net_of(&networks, dstnet, p.dst) == 0;
-	if (dstnet && !ns_transit && !(mark & (GW_MARK | SG_OK | FWD_MARK))) {
+	int managed_cross = srcnet && srcnet != dstnet &&
+		bpf_map_lookup_elem(&boundary_policy,&srcnet) && bpf_map_lookup_elem(&boundary_policy,&dstnet);
+	if (dstnet && !ns_transit && !managed_cross && !(mark & (GW_MARK | SG_OK | FWD_MARK))) {
 		__u16 dport;
 		__u32 l4off = p.is_v6 ? (ETH_HLEN + 40) : (ETH_HLEN + 20);
 		if (sg_l4(skb, p.proto, l4off, &dport)) {
@@ -5558,7 +5922,9 @@ int cozyplane_from_overlay(struct __sk_buff *skb)
 			    opt.opt_class == bpf_htons(SG_OPT_CLASS) && opt.type == SG_OPT_TYPE) {
 				__u16 dport;
 				__u32 l4off = p.is_v6 ? (ETH_HLEN + 40) : (ETH_HLEN + 20);
-				if (sg_l4(skb, p.proto, l4off, &dport)) {
+				int managed = opt.src_net != vni && bpf_map_lookup_elem(&boundary_policy,&vni) &&
+					bpf_map_lookup_elem(&boundary_policy,&opt.src_net);
+				if (!managed && sg_l4(skb, p.proto, l4off, &dport)) {
 					struct local_key dk = { .net = vni, .ip = p.dst };
 					__u64 *dmp = bpf_map_lookup_elem(&sg_members, &dk);
 					__u64 dstmap = dmp ? *dmp : 0;

@@ -23,10 +23,15 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
-  # Cilium's imported cells reconcile their own CRDs (CiliumNode, LB IP pools, …).
-  - apiGroups: [cilium.io]
-    resources: ["*"]
-    verbs: [get, list, watch, create, update, patch, delete]
+  {{- /* No cilium.io rule. The wired cells watch only Services/EndpointSlices
+  (the LB reflector) and node-local Pods/Namespaces (the daemon tables). The one
+  cilium.io consumer compiled in, CiliumLocalRedirectPolicy, registers neither
+  reflector nor controller: kpr/main.go's stubbed DaemonConfig sets the family
+  gates and nothing else, so EnableLocalRedirectPolicy keeps its zero value. The
+  CiliumNode/CiliumEndpoint/policy resource constructors in daemonk8s.ResourcesCell
+  are in the DI graph but never constructed, nothing in this hive depending on
+  them. A template comment, not a `#` one: it documents a rule that is absent, so
+  it has no business shipping inside every applied manifest. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -66,17 +71,6 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      initContainers:
-        # Ensure bpffs is mounted on the host so the LB map pins are a real
-        # bpffs and outlive the process; Bidirectional propagation pushes it to
-        # the node. Cilium's DaemonSet does the equivalent.
-        - name: mount-bpffs
-          image: busybox:1.36
-          command: ["sh", "-c", "mount | grep -q 'bpf on {{ .Values.bpffsRoot }} ' || mount -t bpf bpf {{ .Values.bpffsRoot }}"]
-          securityContext:
-            privileged: true
-          volumeMounts:
-            - {name: bpffs, mountPath: {{ .Values.bpffsRoot }}, mountPropagation: Bidirectional}
       containers:
         - name: kpr
           image: {{ .Values.image }}
@@ -88,9 +82,22 @@ spec:
           env:
             - {name: KPR_CGROUP_ROOT, value: {{ .Values.cgroupRoot | quote }}}
             - {name: KPR_BPFFS_ROOT, value: {{ .Values.bpffsRoot | quote }}}
+            # Without NODE_NAME kpr cannot tell which endpoints are node-local,
+            # so it writes NO LoadBalancer-ingress, NodePort or externalIP rows
+            # at all -- ClusterIPs keep working, which is why the omission is
+            # easy to miss (docs/lb-ingress.md).
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - {name: CLUSTER_DSR, value: {{ .Values.clusterDSR | quote }}}
           securityContext:
             privileged: true
           volumeMounts:
+            # kpr mounts bpffs here itself at startup if the node has none, and
+            # Bidirectional propagates that to the host so the pins outlive the
+            # process. The check is statfs on the mount point, not the mount's
+            # source name: Talos names its bpffs source "none", and a guard that
+            # matched "bpf" stacked an empty bpffs over the real one, hiding the
+            # agent's pins (kpr/bpffs.go).
             - {name: bpffs, mountPath: {{ .Values.bpffsRoot }}, mountPropagation: Bidirectional}
             - {name: cgroup2, mountPath: {{ .Values.cgroupRoot }}}
       volumes:

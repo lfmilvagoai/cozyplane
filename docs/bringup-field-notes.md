@@ -375,3 +375,179 @@ Its nodes share the laptop's kernel (6.8), where pin removal *does* detach. Any
 assumption about BPF object lifetime needs checking on the target kernel — and
 "one link per hook" is now asserted by construction rather than inferred from
 refcount behaviour.
+
+## 10. kpr's init container stacks an empty bpffs on Talos (FIXED)
+
+Switching an existing Cozystack cluster to the cozyplane networking variant
+installed `cozyplane-kpr`, and every pod sandbox on every node immediately began
+failing — 739 `FailedCreatePodSandBox` across 3 Talos nodes in minutes:
+
+```
+plugin type="cozyplane" failed (add): open pinned from_pod program:
+no such file or directory
+```
+
+Nothing was wrong with the agent or its pins. kpr's init container guarded its
+bpffs mount by grepping busybox `mount` output for the mount's **source** name:
+
+```sh
+mount | grep -q 'bpf on /sys/fs/bpf ' || mount -t bpf bpf /sys/fs/bpf
+```
+
+A mount's source name is arbitrary, and Talos names its host bpffs `none`. The
+guard therefore read a node that *had* a bpffs as having none and mounted a
+second, empty one on top. The volume is `mountPropagation: Bidirectional`, so
+that empty mount propagated to the host and shadowed everything the agent had
+pinned under `/sys/fs/bpf/cozyplane` — programs, maps, tcx links. The CNI plugin
+opens those pins on every ADD (`datapath/attach.go`, `OpenPinnedProgram`), so
+every ADD failed, cluster-wide, and the aggregated apiserver never started
+because its pods could not get a sandbox. Each kpr restart stacked another layer.
+
+The comment above the init container claimed Cilium's DaemonSet did the
+equivalent. It does not, and the difference is exactly the bug: Cilium matches
+the **target and filesystem type** (`mount | grep "/sys/fs/bpf type bpf"`), which
+no source name can fool.
+
+The fix drops the init container from both the chart and `deploy/`, and kpr now
+ensures bpffs in-process at startup (`kpr/bpffs.go`) the way the agent already
+does (`datapath.EnsureBPFFS`): `statfs` the mount point and mount only if its
+type is not `BPF_FS_MAGIC`. `statfs` cannot observe a source name at all, so the
+check is immune by construction rather than by matching a better string. The
+helper is duplicated rather than imported because `kpr/` is a separate module
+pinning Cilium's dependency tree; requiring the main module there would pull its
+`cilium/ebpf` version in through MVS.
+
+**If you take one thing from this note:** never identify a mount by its source
+name. Ask the kernel what is mounted at the target. kind cannot see this class of
+bug either — its nodes' bpffs is conventionally named — so anything that decides
+whether to mount needs checking on Talos.
+
+## 11. The chart never gave kpr its node name, so no external address was served (FIXED)
+
+For two weeks on the integrations stand every public hostname answered nothing
+on 443 while the same nodes served 6443 fine, and cozyplane looked healthy
+throughout. Two fixes were aimed at it — `spec.externalIPs` support in kpr
+(#44), then the node-owned address resolver (#47) — and neither changed the
+symptom, because neither was the cause.
+
+`chart/cozyplane-kpr/templates/daemonset.yaml` set `KPR_CGROUP_ROOT` and
+`KPR_BPFFS_ROOT` and nothing else. `deploy/kpr-daemonset.yaml` — the kind
+manifest the e2e uses — also set `NODE_NAME` and `CLUSTER_DSR`. So every
+chart-based deployment ran kpr with no node name, no endpoint matched
+`e.NodeName == nodeName`, the node-local backend set was always empty, and every
+external frontend — LoadBalancer ingress, NodePort and `spec.externalIPs` alike
+— got no `svc_vips` row. Confirmed on the stand: 117 rows in `svc_vips`, not one
+for any of the three published externalIPs, nor for the MetalLB VIP.
+
+**What made it invisible for so long** is an asymmetry: ClusterIP rows are built
+from the *cluster-wide* backend set, so they were written normally. In-cluster
+service traffic worked, socket-LB worked (it reads Cilium's own maps, which do
+carry externalIPs), and a cross-node `connect()` to the externalIP succeeded —
+which reads as "kpr's rows are there". Only traffic arriving from *outside*, on
+the wire, had nothing to match. kpr did log `NODE_NAME unset: LoadBalancer-ingress
+rows disabled` at startup, which undersold it: NodePort and externalIP rows were
+disabled too, and the line was one WARN among a healthy boot.
+
+The fix is the two env entries. kpr now says the whole consequence, at ERROR.
+
+**If you take one thing from this note:** the e2e exercises `deploy/`, so it
+cannot see a divergence in `chart/` — and the chart is what ships. A frontend
+that silently writes no rows while the process looks healthy is the shape to
+watch for; the diagnostic that would have found it in minutes is dumping
+`svc_vips` and noticing the external frontends are absent from it.
+
+**The second half of the same outage.** With the rows finally written, replies
+still did not reach the client — and this is why the symptom read as "not
+intercepted" for so long. `lb_return` chose its egress link from
+`CFG_FLOAT_IFINDEX`, one value for the whole node. node0 carried the published
+addresses on eth0 (`CFG_UPLINK_IFINDEX=8`) but the slot held eth1
+(`CFG_FLOAT_IFINDEX=9`, the MetalLB VLAN, bound because its VIPs are on-link on a
+non-default NIC). So an eth0 request was DNAT'd correctly and its reply left eth1
+sourced `10.20.0.16` — a segment that cannot source it, dropped by the cloud's
+anti-spoof. The client hung; the probe script reported `000`, which it also
+reports for a refusal, and the two were never distinguished. The arrival link is
+now per-flow (`svc_rev_val.ifindex`).
+
+**Second thing to take from this note:** `curl -o /dev/null -w '%{http_code}'`
+returns `000` for a refusal and for a timeout alike. Those point at opposite ends
+of the datapath — no interception versus a misrouted reply — so a probe that
+cannot tell them apart will send you to the wrong half. Record the failure mode,
+not just the code.
+
+## 12. The agent's datapath stopped loading on a 6.18 kernel (FIXED)
+
+A stand that had been idle for a month was woken and its `cozyplane`
+GitRepository moved to `main`. kpr and the controller rolled cleanly; the agent
+then crash-looped on all three Talos nodes (`6.18.38-talos`):
+
+```
+load datapath: load bpf objects: load program: argument list too long
+```
+
+`E2BIG` reads like a malformed syscall, and the program name in the trace
+(`cozyplane_from_pod`) invites a hunt for a bad map or a stale pin. It is
+neither. The verifier's own stats line, at the end of a log that opens with
+17k instructions of register state, says what it is:
+
+```
+BPF program is too large. Processed 1000001 insn
+processed 1000001 insns (limit 1000000) max_states_per_insn 19 total_states 30014
+```
+
+That is the **complexity** ceiling — states explored, not instructions emitted.
+`from_pod` is 18k instructions; the verifier walked a million.
+
+**The bump looked guilty and was not.** Measured on the host's 6.8 kernel,
+`from_pod` cost 484,222 states at the commit the stand had been running and
+485,077 at `main` — the two merged features added **+855 states, 0.18%**. Nothing
+in that range could double a budget. The program had been sitting at
+approximately 100% of the 6.18 ceiling for two months, and a rounding error
+tipped it over. Rolling back restored the stand (the old build demonstrably
+re-pinned and wired pods on the same kernel), which is a mitigation, not a fix:
+the next commit of any size would have done the same thing.
+
+**Root cause — a byte loop behind an early return.** `addr128_eq` and
+`addr128_zero` compared 16-byte addresses with `#pragma unroll` and a
+`return 0` per byte. That is sixteen conditional branches, so up to sixteen
+distinct "not equal" fall-through states, and **each one re-explores everything
+the caller does after the call**. Two of those comparisons sit near the top of
+`from_pod` (the `fe80::1` bridge reply and the ServiceVIP hairpin loopback), so
+the entire rest of the hook was verified over and over. Comparing the address as
+two `__u64`s with a single branch:
+
+| | before | after |
+|---|---|---|
+| `from_pod` states (6.8) | 485,077 | **33,926** |
+| `from_pod` instructions | 18,052 | 17,805 |
+
+A 14x cut from ten lines of C, and the object shrank 20 KB. Ablation was what
+found it: the function the guard called was innocent (stopping it at its first
+statement still cost 483,212), while deleting the three-line guard cost 451,037.
+
+**Why kind cannot catch this.** The same object costs ~485k states on 6.8 and
+over 1M on 6.18 — `max_states_per_insn` 5 versus 19, `total_states` 18,314
+versus 30,014. Newer verifiers explore more, so a program can pass every local
+check and fail on the cluster; `count_dir` hit this same wall on 6.12 (see
+[internals.md](internals.md)). kind runs the host kernel, so the single-node
+load check is silent on complexity by construction.
+
+**What to take from this.** Measure the budget instead of inferring it. Loading
+each program on its own with `LogLevelStats` and reading `processed N insns`
+back off a successful load turns "it loads" into a number, which is the only
+form in which headroom exists:
+
+```go
+coll, _ := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+        Maps:     ebpf.MapOptions{PinPath: pinRoot},
+        Programs: ebpf.ProgramOptions{LogLevel: ebpf.LogLevelStats},
+})
+// coll.Programs[name].VerifierLog: "processed 33926 insns (limit 1000000) ..."
+```
+
+Two traps worth naming, both of which cost time here. Truncating a function to
+bisect its cost only works at statement boundaries — an inserted
+`return` lands inside the preceding `if` body and silently makes the next call
+unconditional, which defeats the constant-folding that kept it cheap and
+produces a hotspot that does not exist. And `llvm-objdump` prints BPF jump
+offsets in decimal, so a `readelf` symbol size (hex, for a large program) and a
+disassembly offset are not the same units.

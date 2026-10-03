@@ -2,7 +2,7 @@
 # Digest-pinned (no floating tag). Built and published by .github/workflows/
 # release.yml on every push to main; see docs/packaging.md for how the digest is
 # refreshed and why pinning it does not change it.
-image: ghcr.io/lllamnyp/cozyplane@sha256:681e37c0d8f919829879bb74eb0419b8a0c7b43694ff94904d3935bc0eb22a0c
+image: ghcr.io/lllamnyp/cozyplane@sha256:60111afff00d91883a63183a058d24f81620f250a4526a94dbb26b937bb327e7
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -99,9 +99,8 @@ agent:
       # to ~100MB+ before the Go heap. Request enough that the scheduler knows.
       memory: 192Mi
     limits:
-      # 256Mi was marginal and finally bit: the agent was OOM-killed at startup on
-      # every node (28MB anon RSS — the cgroup was full of *map* memory, not heap).
-      # A few MB of new maps was the difference. Size for the map footprint.
+      # Sized for the same preallocated map footprint as the request above, with
+      # headroom for new maps — not for the Go heap.
       memory: 512Mi
 
 controller:

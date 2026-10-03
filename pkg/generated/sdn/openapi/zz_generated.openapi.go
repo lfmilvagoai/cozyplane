@@ -70,6 +70,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBinding":               schema_cozyplane_api_sdn_v1alpha1_VPCBinding(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBindingList":           schema_cozyplane_api_sdn_v1alpha1_VPCBindingList(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBindingSpec":           schema_cozyplane_api_sdn_v1alpha1_VPCBindingSpec(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundary":              schema_cozyplane_api_sdn_v1alpha1_VPCBoundary(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryNode":          schema_cozyplane_api_sdn_v1alpha1_VPCBoundaryNode(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryRule":          schema_cozyplane_api_sdn_v1alpha1_VPCBoundaryRule(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCGateway":               schema_cozyplane_api_sdn_v1alpha1_VPCGateway(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCGatewayAppliance":      schema_cozyplane_api_sdn_v1alpha1_VPCGatewayAppliance(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCGatewayIngress":        schema_cozyplane_api_sdn_v1alpha1_VPCGatewayIngress(ref),
@@ -922,6 +925,13 @@ func schema_cozyplane_api_sdn_v1alpha1_PortSpec(ref common.ReferenceCallback) co
 					"forwarding": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Forwarding marks a port allowed to emit packets sourced from an address that is not its own — a tenant router or firewall bridging two VPCs (docs/multi-attach.md). The CNI sets it from the VPCBinding's spec.allowForwarding; the datapath honours it as PORT_F_FORWARD, which lifts from_pod's source RPF check and marks the packet FWD_MARK so the destination's isolation check admits an off-VPC source — but, unlike a gateway, that source is then re-judged by the destination's SecurityGroups as a north-south source (a from:{cidr} rule). Deliberately NOT PORT_F_GATEWAY, which would skip east-west policy entirely.\n\nDISTINCT from Gateway, and it must stay that way. Gateway means \"this is the VPC's .1 egress leg\" and is what desiredGateways reads to program gateways[vni]; a forwarding port is not the VPC's door and must never be programmed as one. They happen to share a datapath flag, not a meaning.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"primary": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Primary is set by the CNI only for the default network attachment. A managed boundary denies Internet initiations on secondary legs.",
 							Type:        []string{"boolean"},
 							Format:      "",
 						},
@@ -1869,6 +1879,181 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCBindingSpec(ref common.ReferenceCallba
 	}
 }
 
+func schema_cozyplane_api_sdn_v1alpha1_VPCBoundary(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPCBoundary limits cross-VPC initiations and Internet egress.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"revision": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Revision is positive and increases whenever the policy changes.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"internet": {
+						SchemaProps: spec.SchemaProps{
+							Default: false,
+							Type:    []string{"boolean"},
+							Format:  "",
+						},
+					},
+					"peers": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryRule"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"revision", "internet"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryRule"},
+	}
+}
+
+func schema_cozyplane_api_sdn_v1alpha1_VPCBoundaryNode(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPCBoundaryNode is an agent instance's successful dataplane acknowledgement.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"node": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"agentUID": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"revision": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int64",
+						},
+					},
+					"observedGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int64",
+						},
+					},
+					"primaryPortsDigest": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"transportReady": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TransportReady confirms that peer maps and routes are synchronized.",
+							Default:     false,
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"node", "agentUID", "revision", "observedGeneration", "primaryPortsDigest", "transportReady"},
+			},
+		},
+	}
+}
+
+func schema_cozyplane_api_sdn_v1alpha1_VPCBoundaryRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPCBoundaryRule admits an initiation; tracked replies require no reverse grant.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"peerRef": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCRef"),
+						},
+					},
+					"direction": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Direction is ingress or egress, relative to this VPC.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"protocol": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Protocol is TCP, UDP or ICMP (family follows the packet).",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: 0,
+										Type:    []string{"integer"},
+										Format:  "int32",
+									},
+								},
+							},
+						},
+					},
+					"icmpType": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int32",
+						},
+					},
+					"icmpCode": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int32",
+						},
+					},
+				},
+				Required: []string{"peerRef", "direction", "protocol"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCRef"},
+	}
+}
+
 func schema_cozyplane_api_sdn_v1alpha1_VPCGateway(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -2586,9 +2771,17 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCSpec(ref common.ReferenceCallback) com
 							Format:      "int32",
 						},
 					},
+					"boundary": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Boundary is an operator-managed ceiling, independent of tenant groups. Setting, changing or removing it requires manage-boundary on this VPC.",
+							Ref:         ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundary"),
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundary"},
 	}
 }
 
@@ -2635,11 +2828,33 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCStatus(ref common.ReferenceCallback) c
 							},
 						},
 					},
+					"boundaryNodes": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"node",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "BoundaryNodes acknowledges the revision loaded by each agent instance.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryNode"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1.Condition{}.OpenAPIModelName()},
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPCBoundaryNode", v1.Condition{}.OpenAPIModelName()},
 	}
 }
 

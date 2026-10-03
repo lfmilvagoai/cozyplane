@@ -255,8 +255,9 @@ type sdnControllerConfig struct {
 // and no restart.
 func setupSDNControllers(mgr manager.Manager, cfg sdnControllerConfig) error {
 	if err := (&sdncontroller.VPCReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		AgentNamespace: cfg.gatewayNamespace,
 		// VNI allocation must read live, never the lagging informer cache —
 		// a stale read hands two VPCs the same network id (isolation break).
 		Reader: mgr.GetAPIReader(),

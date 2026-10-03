@@ -96,6 +96,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &sdnv1alpha1.VPCBindingApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VPCBindingSpec"):
 		return &sdnv1alpha1.VPCBindingSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCBoundary"):
+		return &sdnv1alpha1.VPCBoundaryApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCBoundaryNode"):
+		return &sdnv1alpha1.VPCBoundaryNodeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCBoundaryRule"):
+		return &sdnv1alpha1.VPCBoundaryRuleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VPCGateway"):
 		return &sdnv1alpha1.VPCGatewayApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VPCGatewayAppliance"):

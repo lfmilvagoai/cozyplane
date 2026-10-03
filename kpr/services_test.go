@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -228,5 +229,126 @@ func TestNodePortAndSourceRangeRows(t *testing.T) {
 	}
 	if v, ok := rows[keyFor("10.0.0.5", 30080)]; !ok || v.N != 1 {
 		t.Fatalf("gated-off Cluster NodePort row = %+v ok=%v, want 1 local backend", v, ok)
+	}
+}
+
+// extIPSvc is Cozystack's stock host-ingress shape: a plain ClusterIP Service
+// carrying spec.externalIPs — not a LoadBalancer, and with no NodePort.
+func extIPSvc(etp corev1.ServiceExternalTrafficPolicy, externalIPs ...string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"},
+		Spec: corev1.ServiceSpec{
+			Type:                  corev1.ServiceTypeClusterIP,
+			ClusterIP:             "10.96.0.50",
+			ClusterIPs:            []string{"10.96.0.50"},
+			ExternalIPs:           externalIPs,
+			ExternalTrafficPolicy: etp,
+			Ports: []corev1.ServicePort{
+				{Name: "http", Protocol: corev1.ProtocolTCP, Port: 80},
+			},
+		},
+	}
+}
+
+// kube-proxy and Cilium both program spec.externalIPs; kpr replaces them, so a
+// Service carrying one must get a row for it or that address answers nothing.
+// Regression for the host ingress being unreachable on every public hostname
+// while the same node served 6443 fine.
+func TestExternalIPRows(t *testing.T) {
+	extIP := "10.20.0.16"
+	slices := slice("node-a", "node-b")
+
+	// The frontend is (externalIP, service port) — not a NodePort — and it is
+	// written even though the Service is a plain ClusterIP.
+	svc := extIPSvc(corev1.ServiceExternalTrafficPolicyLocal, extIP)
+	rows, srcs := computeRows(svc, slices, "node-a", nil, false)
+	extKey := keyFor(extIP, 80)
+	v, ok := rows[extKey]
+	if !ok {
+		t.Fatalf("no externalIP row on node-a: %v", rows)
+	}
+	want, _ := addr128(net.ParseIP("10.244.0.10"))
+	if v.N != 1 || v.Be[0].IP != want || v.Be[0].Port != htons(8080) {
+		t.Fatalf("externalIP backend = %v:%d n=%d, want local 10.244.0.10:8080", v.Be[0].IP, v.Be[0].Port, v.N)
+	}
+	// The ClusterIP row is untouched and keeps the cluster-wide set.
+	if cv, ok := rows[keyFor("10.96.0.50", 80)]; !ok || cv.N != 2 {
+		t.Fatalf("ClusterIP row = %+v, want 2 cluster-wide backends", cv)
+	}
+	// loadBalancerSourceRanges does not apply to externalIPs (upstream), so no
+	// source rows and no range flag.
+	if len(srcs) != 0 {
+		t.Errorf("externalIPs produced %d source-range rows, want 0", len(srcs))
+	}
+	if v.Flags&svcFSrcRanges != 0 {
+		t.Error("externalIP row carries the source-range flag")
+	}
+
+	// Every externalIP the Service lists gets its own row.
+	multi := extIPSvc(corev1.ServiceExternalTrafficPolicyLocal, extIP, "10.20.0.17")
+	rows, _ = computeRows(multi, slices, "node-a", nil, false)
+	for _, ip := range []string{extIP, "10.20.0.17"} {
+		if _, ok := rows[keyFor(ip, 80)]; !ok {
+			t.Errorf("no row for externalIP %s", ip)
+		}
+	}
+
+	// Backend selection matches the LB path: Local yields no row on a node with
+	// no local backend...
+	rows, _ = computeRows(svc, slices, "node-c", nil, false)
+	if _, ok := rows[extKey]; ok {
+		t.Error("node-c has an externalIP row despite no local backend")
+	}
+	// ...and Cluster with the DSR opt-in carries the cluster-wide set.
+	cluster := extIPSvc(corev1.ServiceExternalTrafficPolicyCluster, extIP)
+	rows, _ = computeRows(cluster, slices, "node-a", nil, true)
+	if v, ok := rows[extKey]; !ok || v.N != 2 {
+		t.Fatalf("etp Cluster externalIP row = %+v ok=%v, want the cluster-wide 2 backends", rows[extKey], ok)
+	}
+
+	// An empty nodeName — NODE_NAME absent from the DaemonSet — matches no
+	// endpoint, so every externalIP row disappears while the ClusterIP row
+	// survives. That asymmetry shipped to a cluster once: the chart omitted
+	// NODE_NAME, kpr looked healthy, and no external address was ever served.
+	rows, _ = computeRows(svc, slices, "", nil, false)
+	if _, ok := rows[extKey]; ok {
+		t.Error("empty nodeName produced an externalIP row")
+	}
+	if _, ok := rows[keyFor("10.96.0.50", 80)]; !ok {
+		t.Error("empty nodeName dropped the ClusterIP row")
+	}
+
+	// A garbage entry is skipped without taking the good ones with it.
+	bad := extIPSvc(corev1.ServiceExternalTrafficPolicyLocal, "not-an-ip", extIP)
+	rows, _ = computeRows(bad, slices, "node-a", nil, false)
+	if _, ok := rows[extKey]; !ok {
+		t.Error("an unparseable externalIP dropped the valid one")
+	}
+}
+
+// Without a node name no endpoint can match, so every external frontend goes
+// unserved while ClusterIPs keep working — a kpr that looks healthy. The
+// hostname is the node's own on a hostNetwork pod, so it closes that gap
+// instead of leaving it to the manifest.
+func TestResolveNodeName(t *testing.T) {
+	env := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	host := func(h string, err error) func() (string, error) {
+		return func() (string, error) { return h, err }
+	}
+
+	if n, fb := resolveNodeName(env(map[string]string{"NODE_NAME": "node0"}), host("ignored", nil)); n != "node0" || fb {
+		t.Errorf("NODE_NAME set = %q,%v; want node0,false", n, fb)
+	}
+	if n, fb := resolveNodeName(env(nil), host("node1", nil)); n != "node1" || !fb {
+		t.Errorf("NODE_NAME unset = %q,%v; want node1,true", n, fb)
+	}
+	// Nothing to go on: the caller must refuse rather than serve no frontend.
+	if n, _ := resolveNodeName(env(nil), host("", nil)); n != "" {
+		t.Errorf("empty hostname = %q; want \"\"", n)
+	}
+	if n, _ := resolveNodeName(env(nil), host("node2", errors.New("boom"))); n != "" {
+		t.Errorf("hostname error = %q; want \"\"", n)
 	}
 }

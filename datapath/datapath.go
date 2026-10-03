@@ -36,10 +36,10 @@ import (
 // device, and the remotes map. It is used by the agent. The CNI plugin uses the
 // pinned program/maps directly (see attach.go) rather than this Manager.
 type Manager struct {
+	boundaryMu    sync.Mutex
 	objs          overlayObjects
 	geneveIfindex int
 	uplinkIfindex int
-	uplinkMAC     net.HardwareAddr
 	// The floating uplink, when floating addresses live on a different link
 	// than the default route (EnsureFloatingUplink); zero = same as uplink.
 	// floatMu serializes EnsureFloatingUplink: it is called from several
@@ -49,8 +49,7 @@ type Manager struct {
 	// winner's freshly pinned link (found live: every node lost its eth1
 	// from_uplink attach the moment three watchers raced).
 	floatMu       sync.Mutex
-	floatIfindex  int
-	floatMAC      net.HardwareAddr
+	floatBound    floatBinding
 	recreatedPins []string
 }
 
@@ -89,6 +88,13 @@ func (m *Manager) Load(vni uint32) error {
 			return fmt.Errorf("load bpf objects: %+v", ve)
 		}
 		return fmt.Errorf("load bpf objects: %w", err)
+	}
+	// Populate boundary continuations before publishing the entry program pins.
+	if err := m.objs.LbProg.Put(uint32(4), m.objs.CozyplaneFromPodContinue); err != nil {
+		return fmt.Errorf("boundary from continuation: %w", err)
+	}
+	if err := m.objs.LbProg.Put(uint32(5), m.objs.CozyplaneToPodContinue); err != nil {
+		return fmt.Errorf("boundary to continuation: %w", err)
 	}
 
 	// Swap these pins atomically (pin-aside, rename over) rather than
@@ -202,7 +208,7 @@ func (m *Manager) AttachUplinkIngress() (string, error) {
 	if err := m.objs.Params.Put(cfgUplinkIfindex, uint32(idx)); err != nil {
 		return "", fmt.Errorf("set uplink ifindex: %w", err)
 	}
-	// from_uplink answers ARP for floating IPs with this MAC (the advertisement).
+	// Vestigial: nothing reads uplink_mac; written to keep its pinned shape.
 	link, err := netlink.LinkByIndex(idx)
 	if err != nil {
 		return "", fmt.Errorf("lookup uplink %d: %w", idx, err)
@@ -211,11 +217,10 @@ func (m *Manager) AttachUplinkIngress() (string, error) {
 		return "", err
 	}
 	m.uplinkIfindex = idx
-	m.uplinkMAC = link.Attrs().HardwareAddr
 	return name, nil
 }
 
-// setUplinkMAC records the uplink's MAC for the floating-IP ARP responder.
+// setUplinkMAC writes the uplink's MAC into the vestigial uplink_mac map.
 func (m *Manager) setUplinkMAC(mac net.HardwareAddr) error {
 	if len(mac) != 6 {
 		return fmt.Errorf("uplink MAC %q is not 6 bytes", mac)

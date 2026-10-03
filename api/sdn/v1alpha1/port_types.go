@@ -87,6 +87,10 @@ type PortSpec struct {
 	// programmed as one. They happen to share a datapath flag, not a meaning.
 	// +optional
 	Forwarding bool `json:"forwarding,omitempty"`
+	// Primary is set by the CNI only for the default network attachment.
+	// A managed boundary denies Internet initiations on secondary legs.
+	// +optional
+	Primary bool `json:"primary,omitempty"`
 }
 
 // PortStatus is the controller-observed state of a Port.

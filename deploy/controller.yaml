@@ -122,7 +122,10 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Gateway Deployments for a pool-less VPCGateway (a pooled one is pure eBPF).
+  # VPCGateway Deployments in the system namespace, and VPN Deployments /
+  # StatefulSets in tenant namespaces (PR #37); shared account writes are
+  # therefore cluster-wide. Separate controller identities are needed to narrow
+  # the VPN privileges without breaking tenant appliance reconciliation.
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
