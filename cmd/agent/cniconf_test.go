@@ -22,6 +22,36 @@ import (
 	"testing"
 )
 
+func TestDisabledCNIConfigPreservesChainedPlatform(t *testing.T) {
+	dir := t.TempDir()
+	owner := filepath.Join(dir, "00-multus.conf")
+	content := []byte(`{"name":"synthetic-chain"}`)
+	if err := os.WriteFile(owner, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configureCNIConf(dir, "00-cozyplane.conflist", 1450, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(owner)
+	if err != nil || string(got) != string(content) {
+		t.Fatal("disabled writer changed the platform CNI")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("disabled writer installed a competing CNI conf")
+	}
+}
+
+func TestEnabledCNIConfigInstallsStandalone(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := configureCNIConf(dir, "10-cozyplane.conflist", 1450, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "10-cozyplane.conflist")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The runtime loads exactly one conf from /etc/cni/net.d — the one that sorts
 // first — so writing ours unconditionally assumes we are alone on the node.
 // Where the platform chains another CNI that assumption is false, and the file

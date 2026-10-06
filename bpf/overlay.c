@@ -4249,6 +4249,9 @@ struct {
 // else affected).
 struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	// Retain the userspace reference that prevents the kernel from clearing
+	// tail-call entries when the agent exits while pinned programs stay live.
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, 6); // 0: lb_ingress (from_uplink), 1: lb_dsr
 	                        // (from_overlay), 2: hf_ingress (host firewall,
 	                        // every host-stack fall-through), 3: hf_egress
@@ -5078,9 +5081,41 @@ static __attribute__((noinline)) int boundary_gate(struct __sk_buff *skb, struct
 	return bpf_map_update_elem(&boundary_ct, &s->reverse, &s->value, BPF_ANY) == 0;
 }
 
+// Only local NS/NA control frames bypass source RPF. Their source can be
+// link-local or unspecified (DAD), not an authoritative VPC endpoint. The
+// kernel validates the checksum/options on this veth; nothing enters overlay.
+static __always_inline int boundary_neighbor_discovery(struct __sk_buff *skb)
+{
+	__u8 version, target_first;
+	__u16 payload, protocol_hop, type_code;
+	struct addr128 dst;
+	if (bpf_skb_load_bytes(skb, ETH_HLEN + 6, &protocol_hop, sizeof(protocol_hop)) < 0 ||
+	    protocol_hop != bpf_htons((IPPROTO_ICMPV6 << 8) | 255) ||
+	    bpf_skb_load_bytes(skb, ETH_HLEN, &version, sizeof(version)) < 0 ||
+	    (version >> 4) != 6 ||
+	    bpf_skb_load_bytes(skb, ETH_HLEN + 4, &payload, sizeof(payload)) < 0 ||
+	    bpf_ntohs(payload) < 24 || skb->len < ETH_HLEN + 40 + bpf_ntohs(payload) ||
+	    bpf_skb_load_bytes(skb, ETH_HLEN + 24, &dst, sizeof(dst)) < 0 ||
+	    !v6_link_scoped(&dst) || (dst.b[0] == 0xff && (dst.b[1] & 0x0f) != 2) ||
+	    bpf_skb_load_bytes(skb, L4_OFF6, &type_code, sizeof(type_code)) < 0 ||
+	    (type_code != bpf_htons(135 << 8) && type_code != bpf_htons(136 << 8)) ||
+	    bpf_skb_load_bytes(skb, NDP_TARGET_OFF, &target_first, sizeof(target_first)) < 0 ||
+	    target_first == 0xff)
+		return 0;
+	return 1;
+}
+
 SEC("tc")
 int cozyplane_from_pod(struct __sk_buff *skb)
 {
+	// ARP already passes in the continuation. Keep management neighbour
+	// discovery independent of tail-call readiness; IP still fails closed.
+	__u16 ether_type;
+	if (bpf_skb_load_bytes(skb, 12, &ether_type, sizeof(ether_type)) == 0) {
+		if (ether_type == bpf_htons(ETH_P_ARP) ||
+		    (ether_type == bpf_htons(ETH_P_IPV6) && boundary_neighbor_discovery(skb)))
+			return TC_ACT_OK;
+	}
 	__u32 zero = 0, net = 0;
 	__u32 ifindex = skb->ifindex;
 	__u32 *port = bpf_map_lookup_elem(&ports, &ifindex);

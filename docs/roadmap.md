@@ -352,6 +352,13 @@ install installs nothing — [#10](../../issues/10)'s endgame.
 
 ## Open issues index
 
+- [x] Migration listener resource regression (B195): idle receive spin replaced
+  with bounded readiness polling; completed child contexts released; cancellation
+  and replacement ownership tested. Boundary notifications coalesced with bounded
+  ACK contexts; identical map and status writes skipped while drift repair remains.
+  Kernel, unit and race tests pass; corrective v4 image runs on the three lab agents.
+  This does not certify absence of every production leak or close the VM recipe.
+
 | # | Title | Area |
 |---|-------|------|
 | [#1](../../issues/1) | Gate `VPCPeering` creation on a `peer` virtual verb | Peering / RBAC |

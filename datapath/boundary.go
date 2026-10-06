@@ -108,7 +108,7 @@ func (m *Manager) SyncBoundaries(desired []Boundary, known []uint32, primary []P
 		}
 	}
 	for n, p := range current {
-		if !knownSet[n] {
+		if !knownSet[n] && (p.Revision != 0 || p.Internet != 0) {
 			p.Revision = 0
 			p.Internet = 0
 			if err := m.objs.BoundaryPolicy.Put(n, p); err != nil {
@@ -119,10 +119,12 @@ func (m *Manager) SyncBoundaries(desired []Boundary, known []uint32, primary []P
 	}
 	// Prune only obsolete staging versions, never the version a live pointer uses.
 	stage := map[overlayBoundaryRule]uint8{}
+	existingRules := map[overlayBoundaryRule]uint8{}
 	var k overlayBoundaryRule
 	var v uint8
 	ri := m.objs.BoundaryRules.Iterate()
 	for ri.Next(&k, &v) {
+		existingRules[k] = v
 		if p, ok := current[k.Net]; ok && p.Revision == k.Revision {
 			stage[k] = v
 		}
@@ -153,6 +155,9 @@ func (m *Manager) SyncBoundaries(desired []Boundary, known []uint32, primary []P
 		}
 	}
 	for k, v := range rules {
+		if previous, exists := existingRules[k]; exists && previous == v {
+			continue
+		}
 		if err := m.objs.BoundaryRules.Put(k, v); err != nil {
 			return err
 		}
@@ -172,6 +177,9 @@ func (m *Manager) SyncBoundaries(desired []Boundary, known []uint32, primary []P
 		return err
 	}
 	for n, p := range policies {
+		if previous, exists := current[n]; exists && previous == p {
+			continue
+		}
 		if err := m.objs.BoundaryPolicy.Put(n, p); err != nil {
 			return err
 		}

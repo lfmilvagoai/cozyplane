@@ -22,6 +22,8 @@ import (
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -87,6 +89,7 @@ func (r *VPCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 		return ctrl.Result{}, fmt.Errorf("fetch VPC: %w", err)
 	}
+	previousStatus := vpc.DeepCopy().Status
 
 	if vpc.Status.VNI == 0 {
 		vni, err := r.allocateVNI(ctx)
@@ -125,14 +128,16 @@ func (r *VPCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		}
 	}
 
-	if err := r.Status().Update(ctx, vpc); err != nil {
-		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+	if !equality.Semantic.DeepEqual(previousStatus, vpc.Status) {
+		if err := r.Status().Update(ctx, vpc); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("update VPC status: %w", err)
 		}
-		return ctrl.Result{}, fmt.Errorf("update VPC status: %w", err)
-	}
 
-	logger.Info("VPC ready", "name", vpc.Name, "vni", vpc.Status.VNI)
+		logger.Info("VPC ready", "name", vpc.Name, "vni", vpc.Status.VNI)
+	}
 	if vpc.Spec.Boundary != nil {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}

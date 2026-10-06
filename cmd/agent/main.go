@@ -82,21 +82,24 @@ const (
 
 func main() {
 	var (
-		nodeName      = os.Getenv("NODE_NAME")
-		mtu           int
-		vni           uint
-		cniConfName   string
-		genevePort    uint
-		clusterCIDR   string
-		internalCIDRs string
-		masqMode      string
-		vpcDNS        bool
-		clusterDNSIPs string
+		nodeName            = os.Getenv("NODE_NAME")
+		mtu                 int
+		vni                 uint
+		cniConfName         string
+		writeCNI            bool
+		genevePort          uint
+		clusterCIDR         string
+		internalCIDRs       string
+		masqMode            string
+		vpcDNS              bool
+		clusterDNSIPs       string
+		floatingNextHopIPv4 string
 	)
 	flag.IntVar(&mtu, "mtu", 1450, "pod MTU (underlay MTU minus Geneve overhead)")
 	flag.UintVar(&vni, "vni", uint(datapath.DefaultVNI), "VNI for the default network")
 	flag.StringVar(&cniConfName, "cni-conf-name", defaultCNIConfFile,
 		"filename for the CNI conflist in /etc/cni/net.d (lower sorts first, winning over other CNIs)")
+	flag.BoolVar(&writeCNI, "write-cni-conf", true, "install the CNI conflist; disable when the platform owns a chained CNI")
 	flag.UintVar(&genevePort, "geneve-port", datapath.GenevePort,
 		"Geneve UDP destination port (use a non-default port to coexist with another overlay on 6081)")
 	flag.StringVar(&clusterCIDR, "cluster-cidr", "",
@@ -105,6 +108,8 @@ func main() {
 		"cluster-egress masquerade implementation: bpf (eBPF SNAT at the uplink, no netfilter), iptables (kernel MASQUERADE rule), off (the environment masquerades elsewhere)")
 	flag.StringVar(&internalCIDRs, "internal-cidrs", "",
 		"comma-separated cluster-internal CIDRs (pod, service, node networks) a floating pod's public-IP egress must not reach")
+	flag.StringVar(&floatingNextHopIPv4, "floating-next-hop-ipv4", "",
+		"router IPv4 address for connected external pools; empty uses the first host, explicit FIB gateways take priority")
 	flag.BoolVar(&vpcDNS, "vpc-dns", true,
 		"steer VPC pods' cluster-DNS queries to the node-local split-horizon resolver (docs/services-in-vpc.md)")
 	flag.StringVar(&clusterDNSIPs, "cluster-dns", "",
@@ -121,13 +126,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(nodeName, mtu, uint32(vni), cniConfName, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, log); err != nil {
+	if err := run(nodeName, mtu, uint32(vni), cniConfName, writeCNI, uint16(genevePort), clusterCIDR, internalCIDRs, masqMode, vpcDNS, clusterDNSIPs, floatingNextHopIPv4, log); err != nil {
 		log.Error("agent failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs string, log *slog.Logger) error {
+func run(nodeName string, mtu int, vni uint32, cniConfName string, writeCNI bool, genevePort uint16, clusterCIDR, internalCIDRs, masqMode string, vpcDNS bool, clusterDNSIPs, floatingNextHopIPv4 string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -147,6 +152,9 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort ui
 	}
 
 	mgr := datapath.New()
+	if err := mgr.SetFloatingNextHopIPv4(floatingNextHopIPv4); err != nil {
+		return err
+	}
 	if err := mgr.Load(vni); err != nil {
 		return fmt.Errorf("load datapath: %w", err)
 	}
@@ -486,11 +494,13 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort ui
 	// Datapath is up and remotes are syncing; expose the CNI to kubelet — unless
 	// another CNI already owns the directory, in which case say which one. A
 	// silent abstention here would read exactly like a bug.
-	winner, err := writeCNIConf(cniConfName, mtu)
+	winner, err := configureCNIConf(cniConfDir, cniConfName, mtu, writeCNI)
 	if err != nil {
 		return fmt.Errorf("write CNI conf: %w", err)
 	}
-	if winner != "" {
+	if !writeCNI {
+		log.Info("CNI configuration managed by platform; agent ready")
+	} else if winner != "" {
 		log.Info("CNI configuration left to another owner; agent ready",
 			"owner", winner, "ours", cniConfName)
 	} else {
@@ -870,7 +880,7 @@ func watchPorts(ctx context.Context, factory sdninformers.SharedInformerFactory,
 // one node, so exactly one listener ever fires, and it is always the right one.
 func watchGuestAnnouncements(ctx context.Context, ports sdnv1alpha1listers.PortLister, sdn sdnclientset.Interface, selfName, selfIP string, log *slog.Logger) {
 	var mu sync.Mutex
-	running := map[string]context.CancelFunc{} // Port name -> listener cancel
+	running := map[string]*guestAnnouncementListener{} // Port name -> current listener
 
 	fire := func(name, ip string) {
 		// The guest is live on this node. Claim the Port; the controller's
@@ -926,21 +936,22 @@ func watchGuestAnnouncements(ctx context.Context, ports sdnv1alpha1listers.PortL
 				continue
 			}
 			wctx, cancel := context.WithCancel(ctx)
-			running[name] = cancel
+			listener := &guestAnnouncementListener{ctx: wctx, cancel: cancel}
+			running[name] = listener
 			log.Info("watching for migrated guest announcement", "port", name, "ip", t.ip.String())
 			go func(name, ip string, t target) {
-				err := datapath.WatchGuestAnnounce(wctx, t.ifindex, t.mac, t.ip)
+				err := listener.run(func(ctx context.Context) error { return datapath.WatchGuestAnnounce(ctx, t.ifindex, t.mac, t.ip) })
 				mu.Lock()
-				delete(running, name) // let reconcile restart us if still desired
+				claim := listener.finish(running, name, err)
 				mu.Unlock()
-				if err == nil {
+				if claim {
 					fire(name, ip)
 				}
 			}(name, t.ip.String(), t)
 		}
-		for name, cancel := range running {
+		for name, listener := range running {
 			if _, ok := desired[name]; !ok {
-				cancel()
+				listener.cancel()
 				delete(running, name)
 			}
 		}
@@ -1599,19 +1610,22 @@ func severLocalPort(ctx context.Context, core kubernetes.Interface, localFactory
 // beside a chain. Asking for a winning name is asking to win, and this function
 // will grant it — the chained platform's protection is the name its chart asks
 // for, not this check.
-func writeCNIConf(name string, mtu int) (string, error) {
-	if winner := cniConfOwner(cniConfDir, name); winner != "" {
+func configureCNIConf(dir, name string, mtu int, enabled bool) (string, error) {
+	if !enabled {
+		return "", nil
+	}
+	if winner := cniConfOwner(dir, name); winner != "" {
 		return winner, nil
 	}
-	if err := os.MkdirAll(cniConfDir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	body := fmt.Sprintf(cniConfBody, mtu)
-	tmp := filepath.Join(cniConfDir, "."+name+".tmp")
+	tmp := filepath.Join(dir, "."+name+".tmp")
 	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
 		return "", err
 	}
-	return "", os.Rename(tmp, filepath.Join(cniConfDir, name))
+	return "", os.Rename(tmp, filepath.Join(dir, name))
 }
 
 // cniConfOwner returns the conf file in dir that the runtime would load ahead of

@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"slices"
 	"sync"
-	"time"
 
 	sdn "github.com/lllamnyp/cozyplane/api/sdn/v1alpha1"
 	"github.com/lllamnyp/cozyplane/datapath"
@@ -214,10 +213,7 @@ func watchBoundaries(ctx context.Context, factory sdninformers.SharedInformerFac
 	ps := factory.Sdn().V1alpha1().Ports()
 	peers := factory.Sdn().V1alpha1().VPCPeerings()
 	uid := os.Getenv("POD_UID")
-	var mu sync.Mutex
-	resync := func() {
-		mu.Lock()
-		defer mu.Unlock()
+	resync := func(ctx context.Context) {
 		if !vs.Informer().HasSynced() || !ps.Informer().HasSynced() || !peers.Informer().HasSynced() {
 			return
 		}
@@ -276,6 +272,9 @@ func watchBoundaries(ctx context.Context, factory sdninformers.SharedInformerFac
 				if latest.UID != v.UID || latest.Generation != v.Generation || !reflect.DeepEqual(latest.Spec, v.Spec) {
 					return fmt.Errorf("boundary changed before acknowledgement")
 				}
+				if slices.Contains(latest.Status.BoundaryNodes, ack) {
+					return nil
+				}
 				latest.Status.BoundaryNodes = slices.DeleteFunc(latest.Status.BoundaryNodes, func(a sdn.VPCBoundaryNode) bool { return a.Node == node })
 				latest.Status.BoundaryNodes = append(latest.Status.BoundaryNodes, ack)
 				_, err = client.SdnV1alpha1().VPCs(v.Namespace).UpdateStatus(ctx, latest, metav1.UpdateOptions{})
@@ -285,7 +284,8 @@ func watchBoundaries(ctx context.Context, factory sdninformers.SharedInformerFac
 			}
 		}
 	}
-	events := cache.ResourceEventHandlerFuncs{AddFunc: func(any) { resync() }, UpdateFunc: func(_, _ any) { resync() }, DeleteFunc: func(any) { resync() }}
+	notifications := make(boundarySyncNotifications, 1)
+	events := cache.ResourceEventHandlerFuncs{AddFunc: func(any) { notifications.notify() }, UpdateFunc: func(_, _ any) { notifications.notify() }, DeleteFunc: func(any) { notifications.notify() }}
 	_, _ = vs.Informer().AddEventHandler(events)
 	_, _ = ps.Informer().AddEventHandler(events)
 	_, _ = peers.Informer().AddEventHandler(events)
@@ -293,16 +293,7 @@ func watchBoundaries(ctx context.Context, factory sdninformers.SharedInformerFac
 		if !cache.WaitForCacheSync(ctx.Done(), vs.Informer().HasSynced, ps.Informer().HasSynced, peers.Informer().HasSynced) {
 			return
 		}
-		resync()
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				resync()
-			}
-		}
+		notifications.notify()
+		runBoundarySyncWorker(ctx, notifications, resync)
 	}()
 }

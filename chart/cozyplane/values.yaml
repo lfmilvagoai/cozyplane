@@ -17,6 +17,7 @@ genevePort: 6081
 # low prefix (e.g. "00-cozyplane.conflist") to win over a co-installed CNI such
 # as Cilium (which ships 05-cilium.conflist).
 cniConfName: "10-cozyplane.conflist"
+writeCNIConf: true
 
 # Kube-apiserver endpoint the hostNetwork agent/responder dial. Empty = the
 # in-cluster kubernetes.default ClusterIP (10.96.0.1) — correct once a service
@@ -38,6 +39,9 @@ clusterDomain: ""
 # Cluster networking facts for pod egress to the outside world. Not reliably
 # discoverable in-cluster, so declared here.
 egress:
+  # Router for connected external IPv4 pools on a secondary link. Empty keeps
+  # the first-host convention. An explicit FIB gateway always takes priority.
+  floatingNextHopIPv4: ""
   # The cluster pod supernet(s), comma-separated for dual-stack (e.g.
   # "10.244.0.0/16,fd00:10:244::/56"). Enables the cluster-egress masquerade
   # (pods get an off-cluster return path) and is denied to VPC tenants at

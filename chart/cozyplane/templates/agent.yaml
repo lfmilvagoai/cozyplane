@@ -163,7 +163,11 @@ spec:
           args:
             - "--mtu={{ .Values.mtu }}"
             - "--geneve-port={{ .Values.genevePort }}"
+            {{- if .Values.egress.floatingNextHopIPv4 }}
+            - "--floating-next-hop-ipv4={{ .Values.egress.floatingNextHopIPv4 }}"
+            {{- end }}
             - "--cni-conf-name={{ .Values.cniConfName }}"
+            - "--write-cni-conf={{ .Values.writeCNIConf }}"
             {{- if .Values.egress.clusterCIDR }}
             # Cluster-egress masquerade: pod traffic leaving the cluster is
             # SNATed to the node address, giving pods an off-cluster return path.

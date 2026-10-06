@@ -22,6 +22,10 @@ type boundaryPacketFixture struct {
 }
 
 func newBoundaryPacketFixture(t *testing.T, ipv6 bool) *boundaryPacketFixture {
+	return newBoundaryPacketFixtureWithRuleCapacity(t, ipv6, 0)
+}
+
+func newBoundaryPacketFixtureWithRuleCapacity(t *testing.T, ipv6 bool, capacity uint32) *boundaryPacketFixture {
 	t.Helper()
 	if os.Getenv("COZYPLANE_REQUIRE_BPF") != "1" {
 		t.Skip("requires isolated privileged Linux BPF validation")
@@ -35,6 +39,9 @@ func newBoundaryPacketFixture(t *testing.T, ipv6 bool) *boundaryPacketFixture {
 	}
 	for _, m := range spec.Maps {
 		m.Pinning = ebpf.PinNone
+	}
+	if capacity != 0 {
+		spec.Maps["boundary_rules"].MaxEntries = capacity
 	}
 	f := &boundaryPacketFixture{a: net.ParseIP("10.60.0.10"), b: net.ParseIP("10.61.0.20"), secondary: net.ParseIP("10.60.0.11"), world: net.ParseIP("203.0.113.80")}
 	if ipv6 {

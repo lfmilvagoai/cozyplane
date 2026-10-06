@@ -36,10 +36,11 @@ import (
 // device, and the remotes map. It is used by the agent. The CNI plugin uses the
 // pinned program/maps directly (see attach.go) rather than this Manager.
 type Manager struct {
-	boundaryMu    sync.Mutex
-	objs          overlayObjects
-	geneveIfindex int
-	uplinkIfindex int
+	boundaryMu          sync.Mutex
+	objs                overlayObjects
+	geneveIfindex       int
+	uplinkIfindex       int
+	floatingNextHopIPv4 net.IP
 	// The floating uplink, when floating addresses live on a different link
 	// than the default route (EnsureFloatingUplink); zero = same as uplink.
 	// floatMu serializes EnsureFloatingUplink: it is called from several
