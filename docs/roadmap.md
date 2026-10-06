@@ -368,6 +368,14 @@ install installs nothing — [#10](../../issues/10)'s endgame.
 
 ## Open issues index
 
+- [ ] Managed-boundary DNS after socket LB: the Talos CRD recipe reproduced
+  a query translated from the cluster DNS Service IP to its internal backend
+  being dropped before split-horizon steering. Align the boundary exception
+  with that steering predicate. Regression tests reproduce the old drop in both
+  families; real Talos kernel packet tests now verify TCP/UDP rewriting and
+  denial of other management/peer/external traffic. Publish the rebuilt networking
+  image and repeat the target recipe before marking the regional gate complete.
+
 - [ ] Registry pull eligibility for the CRD lab image: the Debian 13 runtime
   updates remove the observed CRITICAL findings, but unfixed HIGH findings
   still need review against the destination registry's policy. A green scan

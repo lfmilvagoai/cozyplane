@@ -4738,6 +4738,17 @@ static __always_inline int addr128_zero(const struct addr128 *a)
 	return (a0 | a1) == 0;
 }
 
+// Socket LB may already have replaced the resolver's Service IP with an
+// internal backend. Both boundary plumbing and steering must recognize it;
+// the continuation still redirects the query, never delivering to that backend.
+static __always_inline int dns_destination(struct pkt *p)
+{
+	__u32 fam = p->is_v6 ? 1 : 0;
+	struct addr128 *dns = bpf_map_lookup_elem(&dns_ips, &fam);
+	return dns && !addr128_zero(dns) &&
+		(addr128_eq(dns, &p->dst) || is_internal(p->dst));
+}
+
 // dns_steer: from_pod's forward half. Called only for a non-gateway VPC pod
 // whose destination resolved off-VPC (dstnet == 0) — so a tenant whose own
 // CIDR covers the cluster service range keeps its :53 traffic to itself, and
@@ -4769,11 +4780,7 @@ static __always_inline int dns_steer(struct __sk_buff *skb, struct pkt *p, __u32
 	// pod cannot legitimately reach is the cluster resolver in some form. A
 	// tenant's DNS to an off-cluster server (via its egress gateway) never
 	// matches; in-VPC :53 never even gets here (dstnet != 0).
-	__u32 fam = p->is_v6 ? 1 : 0;
-	struct addr128 *dns = bpf_map_lookup_elem(&dns_ips, &fam);
-	if (!dns || addr128_zero(dns))
-		return DNS_MISS;
-	if (!addr128_eq(dns, &p->dst) && !is_internal(p->dst))
+	if (!dns_destination(p))
 		return DNS_MISS;
 
 	struct local_key fk = { .net = srcnet, .ip = p->src };
@@ -5136,9 +5143,7 @@ int cozyplane_from_pod(struct __sk_buff *skb)
 			v4_to_128(&gw4,bpf_htonl(LINK_LOCAL_GW));
 			int plumbing = addr128_eq(&s->packet.dst, &gw4) || addr128_eq(&s->packet.dst, &gw6) ||
 				(s->packet.is_v6 && v6_link_scoped(&s->packet.dst));
-			__u32 family = s->packet.is_v6;
-			struct addr128 *dns = bpf_map_lookup_elem(&dns_ips, &family);
-			if (!plumbing && dns && addr128_eq(dns, &s->packet.dst) &&
+			if (!plumbing && !s->key.peer && cfg(CFG_RESOLVER_PORT) && dns_destination(&s->packet) &&
 			    (s->packet.proto == IPPROTO_TCP || s->packet.proto == IPPROTO_UDP) && boundary_l4(skb, s) &&
 			    s->key.dport == bpf_htons(53)) plumbing = 1;
 			if (!plumbing && !boundary_gate(skb, s)) return TC_ACT_SHOT;

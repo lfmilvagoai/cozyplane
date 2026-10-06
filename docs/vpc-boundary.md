@@ -42,6 +42,11 @@ at one hook cannot bypass admission at the other hook.
 Internet permission gates outbound NAT and floating-IP paths before translation.
 Secondary VM legs cannot originate Internet flows. DNS and the existing
 node-origin probe bridge retain their separate, narrow plumbing exceptions.
+The DNS exception must recognize the configured cluster resolver after a
+socket load balancer has translated its Service IP to an internal backend.
+Only off-VPC TCP/UDP destination port 53 is eligible; the continuation redirects
+it to the node-local split-horizon resolver. It never grants direct access to
+that backend, an unrelated management port, an external resolver, or a peer VPC.
 Tenant forwarding legs are denied transit by a managed boundary unless future
 policy explicitly supports it; forwarding grants do not bypass this boundary.
 
