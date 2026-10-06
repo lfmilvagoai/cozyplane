@@ -5112,6 +5112,43 @@ static __always_inline int boundary_neighbor_discovery(struct __sk_buff *skb)
 	return 1;
 }
 
+// A guest has no authoritative VPC source while acquiring its pinned IPv6
+// address. Admit only local RS/DHCPv6 client frames to the veth responder;
+// neither path can enter the overlay or carry ordinary link-local data.
+static __attribute__((noinline)) int boundary_guest_config(struct __sk_buff *skb)
+{
+	struct pkt p;
+	__u16 payload;
+	if (parse_ip(skb, &p) < 0 || !p.is_v6 ||
+	    bpf_skb_load_bytes(skb, ETH_HLEN + 4, &payload, 2) < 0 ||
+	    skb->len < ETH_HLEN + 40 + bpf_ntohs(payload)) return 0;
+	struct addr128 gw = LINK_LOCAL_GW6;
+	int link_source = p.src.b[0] == 0xfe && (p.src.b[1] & 0xc0) == 0x80;
+	if (p.proto == IPPROTO_ICMPV6) {
+		struct addr128 zero = {}, routers = {{0xff, 2, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 2}};
+		__u8 hop;
+		__u16 type_code;
+		return (link_source || addr128_eq(&p.src, &zero)) &&
+			(addr128_eq(&p.dst, &routers) || addr128_eq(&p.dst, &gw)) &&
+			bpf_ntohs(payload) >= 8 &&
+			bpf_skb_load_bytes(skb, ETH_HLEN + 7, &hop, 1) == 0 && hop == 255 &&
+			bpf_skb_load_bytes(skb, L4_OFF6, &type_code, 2) == 0 &&
+			type_code == bpf_htons(133 << 8);
+	}
+	if (p.proto == IPPROTO_UDP && link_source) {
+		struct addr128 servers = {{0xff, 2, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 1, 0, 2}};
+		__u16 ports[2], length;
+		return (addr128_eq(&p.dst, &servers) || addr128_eq(&p.dst, &gw)) &&
+			bpf_ntohs(payload) >= 12 &&
+			bpf_skb_load_bytes(skb, L4_OFF6, ports, sizeof(ports)) == 0 &&
+			ports[0] == bpf_htons(546) && ports[1] == bpf_htons(547) &&
+			bpf_skb_load_bytes(skb, L4_OFF6 + 4, &length, 2) == 0 && length == payload;
+	}
+	return 0;
+}
+
 SEC("tc")
 int cozyplane_from_pod(struct __sk_buff *skb)
 {
@@ -5120,7 +5157,8 @@ int cozyplane_from_pod(struct __sk_buff *skb)
 	__u16 ether_type;
 	if (bpf_skb_load_bytes(skb, 12, &ether_type, sizeof(ether_type)) == 0) {
 		if (ether_type == bpf_htons(ETH_P_ARP) ||
-		    (ether_type == bpf_htons(ETH_P_IPV6) && boundary_neighbor_discovery(skb)))
+		    (ether_type == bpf_htons(ETH_P_IPV6) &&
+		     (boundary_neighbor_discovery(skb) || boundary_guest_config(skb))))
 			return TC_ACT_OK;
 	}
 	__u32 zero = 0, net = 0;

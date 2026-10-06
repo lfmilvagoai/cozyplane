@@ -47,6 +47,11 @@ socket load balancer has translated its Service IP to an internal backend.
 Only off-VPC TCP/UDP destination port 53 is eligible; the continuation redirects
 it to the node-local split-horizon resolver. It never grants direct access to
 that backend, an unrelated management port, an external resolver, or a peer VPC.
+IPv6 guests also need link-local Router Solicitations and DHCPv6 requests before
+they own their pinned VPC address. Those frames must reach only the local veth
+responder, with exact control-message, source-scope and destination checks;
+arbitrary link-local data must still face source authentication. An explicit
+guest address is not evidence that automatic configuration works.
 Tenant forwarding legs are denied transit by a managed boundary unless future
 policy explicitly supports it; forwarding grants do not bypass this boundary.
 
