@@ -58,7 +58,7 @@ func TestActualTenantCRDAdmission(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	// Fail before writes when this is not the isolated test distribution.
-	mode, e := k.CoreV1().ConfigMaps("b195-crd").Get(ctx, "cozyplane-api-mode", metav1.GetOptions{})
+	mode, e := k.CoreV1().ConfigMaps(fixtureNamespace()).Get(ctx, "cozyplane-api-mode", metav1.GetOptions{})
 	if e != nil || mode.Data["mode"] != "crd" {
 		t.Fatal("disposable CRD fixture marker absent")
 	}
@@ -86,6 +86,11 @@ func TestActualTenantCRDAdmission(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	})
+	nodeLabel := "cozyplane.io/crd-recipe-node"
+	nodes, e := k.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: nodeLabel + "=" + ns.Name})
+	if e != nil || len(nodes.Items) != 0 {
+		t.Fatal("HostFirewall fixture selector must match no node")
+	}
 	vpcRef := map[string]any{"namespace": ns.Name, "name": "test-object"}
 	cases := []struct {
 		resource, kind, name string
@@ -100,7 +105,7 @@ func TestActualTenantCRDAdmission(t *testing.T) {
 		{"floatingips", "FloatingIP", "test-object", false, true, map[string]any{"vpcRef": map[string]any{"name": "test-object"}, "target": "10.71.0.2"}},
 		{"ports", "Port", "v4194300.10-71-0-2", true, true, map[string]any{"vpcRef": vpcRef, "ip": "10.71.0.2", "node": "test-node", "nodeIP": "192.0.2.2"}},
 		{"servicevips", "ServiceVIP", "sv4194300.10-71-0-3", true, true, map[string]any{"vpcRef": vpcRef, "ip": "10.71.0.3", "serviceRef": map[string]any{"namespace": ns.Name, "name": "test-service"}, "ports": []any{map[string]any{"protocol": "TCP", "port": int64(80)}}}},
-		{"hostfirewalls", "HostFirewall", "test-crd-firewall", true, true, map[string]any{"nodeSelector": map[string]any{}}},
+		{"hostfirewalls", "HostFirewall", "test-crd-firewall", true, true, map[string]any{"nodeSelector": map[string]any{"matchLabels": map[string]any{nodeLabel: ns.Name}}}},
 		{"vpngateways", "VPNGateway", "test-object", false, true, map[string]any{"vpcRef": map[string]any{"name": "test-object"}, "externalAddress": map[string]any{}}},
 		{"vpnconnections", "VPNConnection", "test-object", false, true, map[string]any{"gatewayRef": map[string]any{"name": "test-object"}, "remoteCIDRs": []any{"10.72.0.0/24"}}},
 	}
@@ -206,3 +211,10 @@ func TestActualTenantCRDAdmission(t *testing.T) {
 	t.Run("webhook-outage-bootstrap-recovery", func(t *testing.T) { testActualWebhookOutage(t, ctx, k, d, ns.Name) })
 }
 func ptr[T any](v T) *T { return &v }
+
+func fixtureNamespace() string {
+	if namespace := os.Getenv("CRD_RECIPE_NAMESPACE"); namespace != "" {
+		return namespace
+	}
+	return "b195-crd"
+}

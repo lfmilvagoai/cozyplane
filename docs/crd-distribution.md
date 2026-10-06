@@ -80,6 +80,15 @@ scoped claims. A distinct regional dataplane recipe must then cover CNI,
 DNS/ServiceVIP/FloatingIP, IPv4/IPv6, revocation and VM primary migration with
 durable rollback and complete fixture cleanup.
 
+Select an explicitly disposable cluster with `CRD_RECIPE_KUBECONFIG`. The
+admission fixture namespace defaults to `b195-crd`; set
+`CRD_RECIPE_NAMESPACE` when the two charts were installed in another namespace.
+The recipe checks that namespace's recorded CRD mode before any writes or
+admission outage. Pause the fixture's chart reconciliation and tenant controller
+for this API-only recipe, then restore both for the separate controller tests.
+Its HostFirewall selects a generated fixture label that must match no node,
+so testing CRUD cannot change the lab's host firewall policy.
+
 Status: implementation under review. The dedicated Kubernetes 1.35.5 API
 fixture exercises all eleven kinds, status preservation, typed errors, export/
 peer permissions, managed objects, native quota, IPv6 claim names and the

@@ -48,7 +48,7 @@ func testActualWebhookOutage(t *testing.T, ctx context.Context, k kubernetes.Int
 			t.Errorf("outage object cleanup: %v", err)
 		}
 	})
-	deployments := k.AppsV1().Deployments("b195-crd")
+	deployments := k.AppsV1().Deployments(fixtureNamespace())
 	deployment, err := deployments.Get(ctx, "cozyplane-admission", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func testActualWebhookOutage(t *testing.T, ctx context.Context, k kubernetes.Int
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		pods, err := k.CoreV1().Pods("b195-crd").List(ctx, metav1.ListOptions{LabelSelector: "app=cozyplane-admission"})
+		pods, err := k.CoreV1().Pods(fixtureNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "app=cozyplane-admission"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func testActualWebhookOutage(t *testing.T, ctx context.Context, k kubernetes.Int
 		t.Helper()
 		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
-			slices, err := k.DiscoveryV1().EndpointSlices("b195-crd").List(ctx, metav1.ListOptions{LabelSelector: "kubernetes.io/service-name=cozyplane-admission"})
+			slices, err := k.DiscoveryV1().EndpointSlices(fixtureNamespace()).List(ctx, metav1.ListOptions{LabelSelector: "kubernetes.io/service-name=cozyplane-admission"})
 			if err != nil {
 				t.Fatal(err)
 			}
