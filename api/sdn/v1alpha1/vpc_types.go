@@ -36,6 +36,7 @@ type VPCSpec struct {
 	// CIDRs are the address ranges (IPv4 and/or IPv6) of the VPC. These may
 	// overlap with other VPCs; isolation is by overlay, not address space.
 	// +optional
+	// +listType=atomic
 	CIDRs []string `json:"cidrs,omitempty"`
 
 	// MTU is the MTU advertised to ports in this VPC. Zero selects the

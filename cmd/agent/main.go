@@ -27,6 +27,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/internal/atomicfile"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"log/slog"
 	"net"
 	"net/http"
@@ -50,6 +52,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 
 	localv1alpha1 "github.com/lllamnyp/cozyplane/api/localsdn/v1alpha1"
 	sdnv1alpha1 "github.com/lllamnyp/cozyplane/api/sdn/v1alpha1"
@@ -465,7 +468,7 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, writeCNI bool
 		serveMetrics(ctx, mgr, factory.Sdn().V1alpha1().VPCs(), nodeName, log)
 
 		register := func(context.Context) error {
-			watchVPCs(factory, mgr, log)
+			watchVPCs(ctx, factory, mgr, log)
 			watchVPCGateways(ctx, factory, mgr, nodePools, nodeIPs, nodeName, state.NodeIP, log)
 			watchPorts(ctx, factory, localFactory, sdnClient, client, mgr, nodeName, state.NodeIP, log)
 			watchPeerings(ctx, factory, mgr, log)
@@ -682,50 +685,53 @@ func watchNodes(ctx context.Context, client kubernetes.Interface, mgr *datapath.
 // watchVPCs mirrors VPC CIDR -> network id into the networks map. Best-effort:
 // the caller starts the informer without blocking on cache sync, so a missing
 // sdn API (during bootstrap) doesn't stall the agent.
-func watchVPCs(factory sdninformers.SharedInformerFactory, mgr *datapath.Manager, log *slog.Logger) {
+func watchVPCs(ctx context.Context, factory sdninformers.SharedInformerFactory, mgr *datapath.Manager, log *slog.Logger) {
 	informer := factory.Sdn().V1alpha1().VPCs().Informer()
-
-	apply := func(obj any) {
-		vpc, ok := obj.(*sdnv1alpha1.VPC)
-		if !ok || vpc.Status.VNI == 0 || len(vpc.Spec.CIDRs) == 0 {
+	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]())
+	enqueue := func(obj any) {
+		key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+		if err == nil {
+			queue.Add(key)
+		}
+	}
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    enqueue,
+		UpdateFunc: func(_, next any) { enqueue(next) },
+		DeleteFunc: enqueue,
+	})
+	if err != nil {
+		queue.ShutDown()
+		log.Error("register VPC network watcher", "err", err)
+		return
+	}
+	go func() { <-ctx.Done(); queue.ShutDown() }()
+	go func() {
+		if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
 			return
 		}
-		vni := uint32(vpc.Status.VNI)
-		// A VPC's own CIDR resolves to itself within its own scope (scope==net).
-		for _, cidr := range vpc.Spec.CIDRs {
-			if err := mgr.SetNetwork(vni, cidr, vni); err != nil {
-				log.Error("set network", "vpc", vpc.Name, "err", err)
+		state := &vpcNetworkState{}
+		for {
+			key, stopped := queue.Get()
+			if stopped {
 				return
 			}
+			obj, exists, err := informer.GetIndexer().GetByKey(key)
+			var desired *sdnv1alpha1.VPC
+			if exists {
+				desired, _ = obj.(*sdnv1alpha1.VPC)
+			}
+			if err == nil {
+				err = state.sync(mgr, key, desired)
+			}
+			if err != nil {
+				log.Error("sync VPC networks", "vpc", key, "err", err)
+				queue.AddRateLimited(key)
+			} else {
+				queue.Forget(key)
+			}
+			queue.Done(key)
 		}
-		// Seed the metering counter (#2): the datapath only increments an
-		// existing entry (it can't allocate one — stack limits), so the agent
-		// creates it here.
-		if err := mgr.EnsureVPCCounter(vni); err != nil {
-			log.Warn("seed vpc counter", "vpc", vpc.Name, "err", err)
-		}
-		log.Info("network set", "vpc", vpc.Name, "cidrs", vpc.Spec.CIDRs, "vni", vpc.Status.VNI)
-	}
-
-	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    apply,
-		UpdateFunc: func(_, newObj any) { apply(newObj) },
-		DeleteFunc: func(obj any) {
-			vpc, ok := obj.(*sdnv1alpha1.VPC)
-			if !ok || len(vpc.Spec.CIDRs) == 0 {
-				return
-			}
-			vni := vpc.Status.VNI
-			if vni <= 0 {
-				return
-			}
-			for _, cidr := range vpc.Spec.CIDRs {
-				if err := mgr.DelNetwork(uint32(vni), cidr); err != nil {
-					log.Error("del network", "vpc", vpc.Name, "err", err)
-				}
-			}
-		},
-	})
+	}()
 }
 
 // watchPorts mirrors remote VPC ports (pods on other nodes) into the remotes
@@ -1480,7 +1486,7 @@ func vniFromPortName(name string) (uint32, bool) {
 		return 0, false
 	}
 	vni, err := strconv.ParseUint(name[1:dot], 10, 32)
-	if err != nil || vni == 0 {
+	if err != nil || vni < uint64(netid.FirstVNI) || vni > uint64(netid.LastVNI) {
 		return 0, false
 	}
 	return uint32(vni), true
@@ -1503,7 +1509,7 @@ func desiredPeerLinks(peerings []*sdnv1alpha1.VPCPeering, vpc func(namespace, na
 	for _, p := range peerings {
 		va := vpc(p.Namespace, p.Spec.VPCRef.Name)
 		vb := vpc(p.Spec.PeerRef.Namespace, p.Spec.PeerRef.Name)
-		if va == nil || vb == nil || va.Status.VNI == 0 || vb.Status.VNI == 0 {
+		if va == nil || vb == nil || !netid.ValidVNI(va.Status.VNI) || !netid.ValidVNI(vb.Status.VNI) {
 			continue
 		}
 		if len(va.Spec.CIDRs) == 0 || len(vb.Spec.CIDRs) == 0 {
@@ -1522,7 +1528,7 @@ func desiredPeerLinks(peerings []*sdnv1alpha1.VPCPeering, vpc func(namespace, na
 		if !matched {
 			continue
 		}
-		a, b := uint32(va.Status.VNI), uint32(vb.Status.VNI)
+		a, b := netid.VNI(va.Status.VNI), netid.VNI(vb.Status.VNI)
 		ca, cb := slices.Clone(va.Spec.CIDRs), slices.Clone(vb.Spec.CIDRs)
 		if a > b {
 			a, b = b, a
@@ -1617,15 +1623,11 @@ func configureCNIConf(dir, name string, mtu int, enabled bool) (string, error) {
 	if winner := cniConfOwner(dir, name); winner != "" {
 		return winner, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
 	body := fmt.Sprintf(cniConfBody, mtu)
-	tmp := filepath.Join(dir, "."+name+".tmp")
-	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
-		return "", err
-	}
-	return "", os.Rename(tmp, filepath.Join(dir, name))
+	return "", atomicfile.Write(filepath.Join(dir, name), []byte(body))
 }
 
 // cniConfOwner returns the conf file in dir that the runtime would load ahead of
@@ -1764,16 +1766,16 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 			return
 		}
 		// Per-VPC name -> id, for resolving from.group references (same VPC).
-		nameID := map[vpcKey]map[string]int32{}
+		nameID := map[vpcKey]map[string]uint16{}
 		for _, sg := range allSGs {
-			if sg.Status.ID == 0 {
+			if !netid.ValidGroup(sg.Status.ID) {
 				continue
 			}
 			k := vpcKey{sg.Namespace, sg.Spec.VPCRef.Name}
 			if nameID[k] == nil {
-				nameID[k] = map[string]int32{}
+				nameID[k] = map[string]uint16{}
 			}
-			nameID[k][sg.Name] = sg.Status.ID
+			nameID[k][sg.Name] = netid.Group(sg.Status.ID)
 		}
 
 		var rules []datapath.SGRule
@@ -1782,14 +1784,14 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 		var egressCidrRules []datapath.SGEgressCidr
 		nets := map[uint32]bool{}
 		for _, sg := range allSGs {
-			if sg.Status.ID == 0 {
+			if !netid.ValidGroup(sg.Status.ID) {
 				continue
 			}
 			vpc, err := vpcs.Lister().VPCs(sg.Namespace).Get(sg.Spec.VPCRef.Name)
-			if err != nil || vpc.Status.VNI == 0 {
+			if err != nil || !netid.ValidVNI(vpc.Status.VNI) {
 				continue
 			}
-			net_ := uint32(vpc.Status.VNI)
+			net_ := netid.VNI(vpc.Status.VNI)
 			nets[net_] = true
 			k := vpcKey{sg.Namespace, sg.Spec.VPCRef.Name}
 			for _, ing := range sg.Spec.Ingress {
@@ -1804,10 +1806,10 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 					if v := ing.From.VPC; v != nil {
 						srcKey = vpcKey{v.Namespace, v.Name}
 						pvpc, err := vpcs.Lister().VPCs(v.Namespace).Get(v.Name)
-						if err != nil || pvpc.Status.VNI == 0 {
+						if err != nil || !netid.ValidVNI(pvpc.Status.VNI) {
 							continue // peer VPC unknown/not ready yet
 						}
-						srcNet = uint32(pvpc.Status.VNI)
+						srcNet = netid.VNI(pvpc.Status.VNI)
 					}
 					id, ok := nameID[srcKey][ing.From.Group]
 					if !ok {
@@ -1824,12 +1826,12 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 						log.Warn("security group: bad cidr; rule ignored", "group", sg.Name, "cidr", ing.From.CIDR, "err", err)
 						continue
 					}
-					cidrRules = append(cidrRules, compileCidrPorts(net_, ipnet, 1<<uint(sg.Status.ID), ing.Ports)...)
+					cidrRules = append(cidrRules, compileCidrPorts(net_, ipnet, 1<<uint(netid.Group(sg.Status.ID)), ing.Ports)...)
 					continue
 				default:
 					continue
 				}
-				for _, r := range compileRulePorts(net_, srcNet, uint16(sg.Status.ID), allowed, ing.Ports) {
+				for _, r := range compileRulePorts(net_, srcNet, netid.Group(sg.Status.ID), allowed, ing.Ports) {
 					rules = append(rules, r)
 				}
 			}
@@ -1845,7 +1847,7 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 						log.Warn("security group: bad egress cidr; rule ignored", "group", sg.Name, "cidr", eg.To.CIDR, "err", err)
 						continue
 					}
-					egressCidrRules = append(egressCidrRules, compileEgressCidrPorts(net_, ipnet, 1<<uint(sg.Status.ID), eg.Ports)...)
+					egressCidrRules = append(egressCidrRules, compileEgressCidrPorts(net_, ipnet, 1<<uint(netid.Group(sg.Status.ID)), eg.Ports)...)
 					continue
 				}
 				if eg.To.Group == "" {
@@ -1856,17 +1858,17 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 				if v := eg.To.VPC; v != nil {
 					dstKey = vpcKey{v.Namespace, v.Name}
 					dvpc, err := vpcs.Lister().VPCs(v.Namespace).Get(v.Name)
-					if err != nil || dvpc.Status.VNI == 0 {
+					if err != nil || !netid.ValidVNI(dvpc.Status.VNI) {
 						continue
 					}
-					dstNet = uint32(dvpc.Status.VNI)
+					dstNet = netid.VNI(dvpc.Status.VNI)
 				}
 				dstID, ok := nameID[dstKey][eg.To.Group]
 				if !ok {
 					continue
 				}
 				allowedDst := uint64(1) << uint(dstID)
-				for _, e := range compileEgressPorts(net_, dstNet, uint16(sg.Status.ID), allowedDst, eg.Ports) {
+				for _, e := range compileEgressPorts(net_, dstNet, netid.Group(sg.Status.ID), allowedDst, eg.Ports) {
 					egressRules = append(egressRules, e)
 				}
 			}
@@ -1903,12 +1905,7 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 			if !ok {
 				continue
 			}
-			var bitmap uint64
-			for _, id := range p.Status.Groups {
-				if id > 0 && id < datapath.SGWorldGroup {
-					bitmap |= 1 << uint(id)
-				}
-			}
+			bitmap := securityGroupMembership(p.Status.Groups)
 			if bitmap == 0 {
 				continue
 			}
@@ -1935,6 +1932,20 @@ func watchSecurityGroups(ctx context.Context, factory sdninformers.SharedInforme
 	})
 }
 
+// A selected but unrealized SG retains a nonempty bitmap with no user rules.
+// This denies new SG-gated TCP/UDP admissions, preserving established traffic
+// and the existing SG protocol semantics. Empty means no selected groups.
+func securityGroupMembership(ids []int32) uint64 {
+	var bitmap uint64
+	for _, id := range ids {
+		if !netid.ValidGroup(id) {
+			return 1
+		} // bit 0: pending, never allowed by a user rule.
+		bitmap |= 1 << id
+	}
+	return bitmap
+}
+
 // compileRulePorts expands an ingress rule's port list into datapath rules for
 // (net, dst group, allowed sources). No ports means every protocol and port
 // (an any-port rule per protocol); a listed port with no protocol match is
@@ -1948,6 +1959,9 @@ func compileRulePorts(net_, srcNet uint32, group uint16, allowed uint64, ports [
 		return out
 	}
 	for _, pp := range ports {
+		if pp.Port < 1 || pp.Port > 65535 {
+			continue
+		}
 		var proto uint8
 		switch pp.Protocol {
 		case "TCP":
@@ -1957,6 +1971,7 @@ func compileRulePorts(net_, srcNet uint32, group uint16, allowed uint64, ports [
 		default:
 			continue
 		}
+		// #nosec G115 -- pp.Port outside 1..65535 is rejected above; zero remains an explicit empty-list wildcard.
 		out = append(out, datapath.SGRule{Net: net_, SrcNet: srcNet, Group: group, Proto: proto, Port: uint16(pp.Port), Allowed: allowed})
 	}
 	return out
@@ -1973,6 +1988,9 @@ func compileEgressPorts(srcNet, dstNet uint32, group uint16, allowedDst uint64, 
 		return out
 	}
 	for _, pp := range ports {
+		if pp.Port < 1 || pp.Port > 65535 {
+			continue
+		}
 		var proto uint8
 		switch pp.Protocol {
 		case "TCP":
@@ -1999,6 +2017,9 @@ func compileEgressCidrPorts(srcNet uint32, cidr *net.IPNet, allowedSrc uint64, p
 		return out
 	}
 	for _, pp := range ports {
+		if pp.Port < 1 || pp.Port > 65535 {
+			continue
+		}
 		var proto uint8
 		switch pp.Protocol {
 		case "TCP":
@@ -2031,6 +2052,9 @@ func compileCidrPorts(net_ uint32, cidr *net.IPNet, allowedGroups uint64, ports 
 		return out
 	}
 	for _, pp := range ports {
+		if pp.Port < 1 || pp.Port > 65535 {
+			continue
+		}
 		var proto uint8
 		switch pp.Protocol {
 		case "TCP":
@@ -2062,7 +2086,7 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 		var entries []datapath.SvcEntry
 		for _, sv := range all {
 			vpc, err := vpcs.Lister().VPCs(sv.Spec.VPCRef.Namespace).Get(sv.Spec.VPCRef.Name)
-			if err != nil || vpc.Status.VNI == 0 {
+			if err != nil || !netid.ValidVNI(vpc.Status.VNI) {
 				continue
 			}
 			vip := net.ParseIP(sv.Spec.IP)
@@ -2070,6 +2094,9 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 				continue
 			}
 			for _, p := range sv.Spec.Ports {
+				if p.Port < 1 || p.Port > 65535 {
+					continue
+				}
 				var proto uint8
 				switch p.Protocol {
 				case "TCP":
@@ -2082,6 +2109,9 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 				var backends []datapath.SvcBackend
 				for _, b := range sv.Status.Backends {
 					for _, bp := range b.Ports {
+						if bp.TargetPort < 1 || bp.TargetPort > 65535 {
+							continue
+						}
 						if bp.Protocol != p.Protocol || bp.Port != p.Port {
 							continue
 						}
@@ -2094,7 +2124,7 @@ func watchServiceVIPs(ctx context.Context, factory sdninformers.SharedInformerFa
 					log.Warn("service VIP backends truncated", "vip", sv.Name, "have", len(backends), "max", datapath.SvcMaxBackends)
 				}
 				entries = append(entries, datapath.SvcEntry{
-					Net:      uint32(vpc.Status.VNI),
+					Net:      netid.VNI(vpc.Status.VNI),
 					VIP:      vip,
 					Proto:    proto,
 					Port:     uint16(p.Port),
@@ -2136,8 +2166,8 @@ func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1in
 		names := map[uint32][2]string{}
 		if all, err := vpcs.Lister().List(labels.Everything()); err == nil {
 			for _, v := range all {
-				if v.Status.VNI != 0 {
-					names[uint32(v.Status.VNI)] = [2]string{v.Namespace, v.Name}
+				if netid.ValidVNI(v.Status.VNI) {
+					names[netid.VNI(v.Status.VNI)] = [2]string{v.Namespace, v.Name}
 				}
 			}
 		}

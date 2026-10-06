@@ -363,7 +363,11 @@ func (m *Manager) bindFloatUplink(link netlink.Link, ip, gw net.IP) error {
 	// ifindex first: on a FIRST bind it leaves the window at (new link, nh 0),
 	// which falls back to a plain FIB lookup, rather than (default link, new
 	// nh), whose next-hop is not reachable there.
-	if err := m.objs.Params.Put(cfgFloatIfindex, uint32(idx)); err != nil {
+	index, err := Ifindex(idx)
+	if err != nil {
+		return err
+	}
+	if err := m.objs.Params.Put(cfgFloatIfindex, index); err != nil {
 		return fmt.Errorf("set floating uplink ifindex: %w", err)
 	}
 	if err := m.objs.Params.Put(cfgFloatNH, want.nh); err != nil {
@@ -621,13 +625,20 @@ func extLinksToPrune(have map[overlayLpmKey]overlayExtEgress, idx int, keep []ov
 // extEgressVal builds the map value: the link, its router, and its subnet for
 // the on/off-subnet test the datapath makes against a destination.
 func extEgressVal(idx int, subnet *net.IPNet, nh net.IP) (overlayExtEgress, error) {
+	index, err := Ifindex(idx)
+	if err != nil {
+		return overlayExtEgress{}, err
+	}
+	if _, _, err := cidrAddressPrefix(subnet); err != nil {
+		return overlayExtEgress{}, err
+	}
 	base := subnet.IP.Mask(subnet.Mask).To4()
 	mask := net.IP(subnet.Mask).To4()
 	if base == nil || mask == nil {
 		return overlayExtEgress{}, fmt.Errorf("ext link %s is not v4", subnet)
 	}
 	v := overlayExtEgress{
-		Ifindex: uint32(idx),
+		Ifindex: index,
 		Base:    binary.NativeEndian.Uint32(base),
 		Mask:    binary.NativeEndian.Uint32(mask),
 	}

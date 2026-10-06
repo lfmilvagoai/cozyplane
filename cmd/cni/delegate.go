@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"net"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -77,7 +78,7 @@ func addDelegate(ctx context.Context, args *skel.CmdArgs, conf *NetConf,
 	if err != nil {
 		return fmt.Errorf("get vpc %s/%s: %w", a.VPCNamespace, a.VPCName, err)
 	}
-	if vpc.Status.VNI == 0 {
+	if !netid.ValidVNI(vpc.Status.VNI) {
 		return fmt.Errorf("vpc %s/%s is not ready (no VNI assigned yet)", a.VPCNamespace, a.VPCName)
 	}
 	if len(vpc.Spec.CIDRs) == 0 {
@@ -116,7 +117,7 @@ func addDelegate(ctx context.Context, args *skel.CmdArgs, conf *NetConf,
 		mtu = state.MTU
 	}
 
-	netID := uint32(vpc.Status.VNI)
+	netID := netid.VNI(vpc.Status.VNI)
 	if forwarding {
 		netID |= datapath.PortForwardFlag
 		if len(fwdCIDRs) > 0 {
@@ -133,7 +134,7 @@ func addDelegate(ctx context.Context, args *skel.CmdArgs, conf *NetConf,
 	// following the active location or a co-located client lands in the
 	// not-yet-running VM.
 	if bound && port.Spec.Node != "" && port.Spec.Node != state.NodeName {
-		if err = datapath.DelLocal(uint32(vpc.Status.VNI), vpcIP); err != nil {
+		if err = datapath.DelLocal(netid.VNI(vpc.Status.VNI), vpcIP); err != nil {
 			return err
 		}
 	}

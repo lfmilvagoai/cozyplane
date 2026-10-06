@@ -80,6 +80,7 @@ func main() {
 }
 
 func run(path string, log *slog.Logger) error {
+	// #nosec G304 G703 -- VPN_CONFIG is an operator-set environment path to the controller-mounted Secret; tenant requests cannot select this path.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read config %q: %w", path, err)
@@ -317,17 +318,21 @@ func wireGuardSnapshot(dev *wgtypes.Device, names map[wgtypes.Key]string, now ti
 	}
 	for i := range dev.Peers {
 		p := &dev.Peers[i]
+		rx, tx := p.ReceiveBytes, p.TransmitBytes
+		if rx < 0 || tx < 0 {
+			continue
+		}
 		last := int64(0)
 		up := false
 		if !p.LastHandshakeTime.IsZero() {
 			last = p.LastHandshakeTime.Unix()
-			up = now.Sub(p.LastHandshakeTime) <= wireGuardHandshakeTimeout
+			up = !p.LastHandshakeTime.After(now) && now.Sub(p.LastHandshakeTime) <= wireGuardHandshakeTimeout
 		}
 		s.Connections[connLabel(names, p.PublicKey)] = vpnstatus.Connection{
 			Up:                up,
 			LastHandshakeUnix: last,
-			RXBytes:           uint64(p.ReceiveBytes),
-			TXBytes:           uint64(p.TransmitBytes),
+			RXBytes:           uint64(rx),
+			TXBytes:           uint64(tx),
 		}
 	}
 	return s

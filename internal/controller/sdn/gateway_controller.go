@@ -19,6 +19,7 @@ package sdn
 import (
 	"context"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -115,7 +116,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if v4Covered && v6Covered && haveIdentity {
 		return ctrl.Result{}, r.deleteGateways(ctx, vpc.Namespace, vpc.Name)
 	}
-	if vpc.Status.VNI == 0 {
+	if !netid.ValidVNI(vpc.Status.VNI) {
 		return ctrl.Result{}, nil // requeued by the VPC status update
 	}
 

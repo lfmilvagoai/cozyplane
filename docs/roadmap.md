@@ -15,6 +15,20 @@ they're discovered rather than leaving them only in issues.
 
 ## Immediate roadmap — what's genuinely open
 
+### CRD distribution and security follow-up — 2026-10-06
+
+- [ ] Review and publish the full `api.mode: crd` distribution, eleven generated
+  tenant schemas, shared admission strategies, TLS rotation and matching
+  two-phase PackageSource variants. Dedicated actual kube-apiserver checks pass;
+  this is not yet merged or certified on a regional Talos/KubeVirt cluster.
+- [ ] Complete the fresh CRD regional CNI/IPv4/IPv6/DNS/ServiceVIP/FloatingIP,
+  allocation/repair, webhook outage and VM primary migration/rollback recipe.
+- [ ] Release and pin the image containing admission and the bounded DNS,
+  identifier/port validation and retry-safe VPC map reconciliation fixes.
+  Unit/race checks and the global gosec scan have passed; recheck the final image
+  and retain exact scope of each proof. Short memory windows do not certify
+  absence of a heap leak.
+
 The sections below are the full ledger, and most of it is ticked. This is the
 short list: what is actually left, in rough priority order. Revised **2026-07-14**,
 once the north-south arc closed (one declared boundary, metered, with the tenant's

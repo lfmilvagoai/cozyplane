@@ -19,6 +19,7 @@ package vpc
 import (
 	"context"
 	"errors"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"net"
 	"reflect"
 	"slices"
@@ -217,7 +218,11 @@ func (vpcStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.
 }
 
 func (vpcStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return field.ErrorList{}
+	vni := obj.(*sdn.VPC).Status.VNI
+	if vni != 0 && !netid.ValidVNI(vni) {
+		return field.ErrorList{field.Invalid(field.NewPath("status", "vni"), vni, "must be zero (pending) or between 100 and 4194303")}
+	}
+	return nil
 }
 
 func (vpcStatusStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {

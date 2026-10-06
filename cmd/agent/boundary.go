@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"log/slog"
 	"net"
 	"os"
@@ -30,18 +31,18 @@ func compileBoundaries(vpcs []*sdn.VPC, ports []*sdn.Port) ([]datapath.Boundary,
 	var known []uint32
 	for _, v := range vpcs {
 		vni := v.Status.VNI
-		if vni < 0 {
+		if vni != 0 && !netid.ValidVNI(vni) {
 			return nil, nil, nil, fmt.Errorf("invalid VPC VNI")
 		}
-		if vni > 0 {
+		if netid.ValidVNI(vni) {
 			byRef[sdn.VPCRef{Namespace: v.Namespace, Name: v.Name}] = v
-			known = append(known, uint32(vni))
+			known = append(known, netid.VNI(vni))
 		}
 	}
 	out := []datapath.Boundary{}
 	for _, v := range vpcs {
 		vni := v.Status.VNI
-		if vni <= 0 || v.Spec.Boundary == nil {
+		if !netid.ValidVNI(vni) || v.Spec.Boundary == nil {
 			continue
 		}
 		if v.Spec.Boundary.Revision < 1 {
@@ -57,7 +58,7 @@ func compileBoundaries(vpcs []*sdn.VPC, ports []*sdn.Port) ([]datapath.Boundary,
 		if id == 0 {
 			id = 1
 		}
-		b := datapath.Boundary{Net: uint32(vni), Identity: id, Revision: uint64(v.Spec.Boundary.Revision), Internet: v.Spec.Boundary.Internet}
+		b := datapath.Boundary{Net: netid.VNI(vni), Identity: id, Revision: uint64(v.Spec.Boundary.Revision), Internet: v.Spec.Boundary.Internet}
 		for _, c := range v.Spec.CIDRs {
 			_, cidr, err := net.ParseCIDR(c)
 			if err != nil {
@@ -71,7 +72,7 @@ func compileBoundaries(vpcs []*sdn.VPC, ports []*sdn.Port) ([]datapath.Boundary,
 				return nil, nil, nil, fmt.Errorf("boundary peer not realized")
 			}
 			peerVNI := peer.Status.VNI
-			if peerVNI <= 0 {
+			if !netid.ValidVNI(peerVNI) {
 				return nil, nil, nil, fmt.Errorf("boundary peer not realized")
 			}
 			if peer == v || sdn.CIDRsOverlap(v.Spec.CIDRs, peer.Spec.CIDRs) {
@@ -80,7 +81,7 @@ func compileBoundaries(vpcs []*sdn.VPC, ports []*sdn.Port) ([]datapath.Boundary,
 			if r.Direction != "ingress" && r.Direction != "egress" {
 				return nil, nil, nil, fmt.Errorf("invalid boundary direction")
 			}
-			base := datapath.BoundaryRule{Peer: uint32(peerVNI), Ingress: r.Direction == "ingress"}
+			base := datapath.BoundaryRule{Peer: netid.VNI(peerVNI), Ingress: r.Direction == "ingress"}
 			switch r.Protocol {
 			case "TCP", "UDP":
 				if len(r.Ports) == 0 || len(r.Ports) > 32 || r.ICMPType != nil || r.ICMPCode != nil {
@@ -123,14 +124,14 @@ func compileBoundaries(vpcs []*sdn.VPC, ports []*sdn.Port) ([]datapath.Boundary,
 			continue
 		}
 		vni := v.Status.VNI
-		if vni <= 0 {
+		if !netid.ValidVNI(vni) {
 			return nil, nil, nil, fmt.Errorf("primary VPC not realized")
 		}
 		ip := net.ParseIP(p.Spec.IP)
 		if ip == nil {
 			return nil, nil, nil, fmt.Errorf("invalid primary Port address")
 		}
-		prim = append(prim, datapath.PrimaryPort{Net: uint32(vni), IP: ip})
+		prim = append(prim, datapath.PrimaryPort{Net: netid.VNI(vni), IP: ip})
 	}
 	return out, known, prim, nil
 }
@@ -185,7 +186,7 @@ func syncPeerTransport(mgr *datapath.Manager, links []peerLink) error {
 
 func boundaryTransportComplete(v *sdn.VPC, byRef map[sdn.VPCRef]*sdn.VPC, links []peerLink) bool {
 	vni := v.Status.VNI
-	if vni <= 0 {
+	if !netid.ValidVNI(vni) {
 		return false
 	}
 	for _, r := range v.Spec.Boundary.Peers {
@@ -194,10 +195,10 @@ func boundaryTransportComplete(v *sdn.VPC, byRef map[sdn.VPCRef]*sdn.VPC, links 
 			return false
 		}
 		peerVNI := p.Status.VNI
-		if peerVNI <= 0 {
+		if !netid.ValidVNI(peerVNI) {
 			return false
 		}
-		a, b := uint32(vni), uint32(peerVNI)
+		a, b := netid.VNI(vni), netid.VNI(peerVNI)
 		if a > b {
 			a, b = b, a
 		}
@@ -251,7 +252,7 @@ func watchBoundaries(ctx context.Context, factory sdninformers.SharedInformerFac
 			return
 		} // No agent-instance identity means no trusted acknowledgement.
 		for _, v := range all {
-			if v.Spec.Boundary == nil || v.Status.VNI == 0 {
+			if v.Spec.Boundary == nil || !netid.ValidVNI(v.Status.VNI) {
 				continue
 			}
 			identities := []boundaryidentity.PrimaryPort{}

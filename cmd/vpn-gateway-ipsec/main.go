@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -109,6 +110,7 @@ func main() {
 }
 
 func run(path string, log *slog.Logger) error {
+	// #nosec G304 G703 -- VPN_CONFIG is an operator-set environment path to the controller-mounted Secret; tenant requests cannot select this path.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read config %q: %w", path, err)
@@ -314,9 +316,10 @@ func collectIPsecMetrics(events []*vici.Message, peers []peer, now time.Time) ma
 				m.TXPackets += messageUint(child, "packets-out")
 				if messageString(child, "state") == "INSTALLED" {
 					m.Up = 1
-					if established > 0 {
-						ts := now.Add(-time.Duration(established) * time.Second).Unix()
-						if ts > m.LastHandshakeSec {
+					if established > 0 && established <= math.MaxInt64 {
+						age := int64(established)
+						ts := now.Unix() - age
+						if now.Unix() >= age && ts > m.LastHandshakeSec {
 							m.LastHandshakeSec = ts
 						}
 					}

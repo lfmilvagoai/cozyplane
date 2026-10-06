@@ -19,11 +19,13 @@ package securitygroup
 import (
 	"context"
 	"errors"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"github.com/lllamnyp/cozyplane/pkg/registry/sdn/authz"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"net"
 
 	"github.com/lllamnyp/cozyplane/api/sdn"
+	metavalidation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -97,10 +99,12 @@ func (s securityGroupStrategy) Validate(ctx context.Context, obj runtime.Object)
 func validateSecurityGroup(sg *sdn.SecurityGroup) field.ErrorList {
 	var errs field.ErrorList
 	specPath := field.NewPath("spec")
+	errs = append(errs, metavalidation.ValidateLabelSelector(&sg.Spec.PodSelector, metavalidation.LabelSelectorValidationOptions{}, specPath.Child("podSelector"))...)
 	if sg.Spec.VPCRef.Name == "" {
 		errs = append(errs, field.Required(specPath.Child("vpcRef", "name"), "the local VPC name is required"))
 	}
 	for i, r := range sg.Spec.Ingress {
+		errs = append(errs, validatePorts(r.Ports, specPath.Child("ingress").Index(i).Child("ports"))...)
 		p := specPath.Child("ingress").Index(i).Child("from")
 		hasGroup := r.From.Group != ""
 		hasCIDR := r.From.CIDR != ""
@@ -127,6 +131,7 @@ func validateSecurityGroup(sg *sdn.SecurityGroup) field.ErrorList {
 		}
 	}
 	for i, r := range sg.Spec.Egress {
+		errs = append(errs, validatePorts(r.Ports, specPath.Child("egress").Index(i).Child("ports"))...)
 		p := specPath.Child("egress").Index(i).Child("to")
 		hasGroup := r.To.Group != ""
 		hasCIDR := r.To.CIDR != ""
@@ -147,6 +152,22 @@ func validateSecurityGroup(sg *sdn.SecurityGroup) field.ErrorList {
 			if !hasGroup {
 				errs = append(errs, field.Required(p.Child("group"), "a peer-VPC egress reference must name a group"))
 			}
+		}
+	}
+	return errs
+}
+
+// Only an empty port list denotes all ports. Explicit zero and overflowing
+// ports must never reach the datapath's uint16 wildcard representation.
+func validatePorts(ports []sdn.SecurityGroupPort, path *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	for i, port := range ports {
+		p := path.Index(i)
+		if port.Protocol != "TCP" && port.Protocol != "UDP" {
+			errs = append(errs, field.NotSupported(p.Child("protocol"), port.Protocol, []string{"TCP", "UDP"}))
+		}
+		if port.Port < 1 || port.Port > 65535 {
+			errs = append(errs, field.Invalid(p.Child("port"), port.Port, "must be between 1 and 65535"))
 		}
 	}
 	return errs
@@ -205,7 +226,11 @@ func (securityGroupStatusStrategy) PrepareForUpdate(ctx context.Context, obj, ol
 }
 
 func (securityGroupStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return field.ErrorList{}
+	id := obj.(*sdn.SecurityGroup).Status.ID
+	if id != 0 && !netid.ValidGroup(id) {
+		return field.ErrorList{field.Invalid(field.NewPath("status", "id"), id, "must be zero (pending) or between 1 and 62")}
+	}
+	return nil
 }
 
 func (securityGroupStatusStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {

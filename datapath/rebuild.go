@@ -19,6 +19,7 @@ package datapath
 import (
 	"errors"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -87,10 +88,18 @@ func parseVethAlias(alias string) (rawNet uint32, ips []net.IP, mac net.Hardware
 		if !found {
 			return 0, nil, nil, false
 		}
+		if _, exists := fields[k]; exists {
+			return 0, nil, nil, false
+		}
+		switch k {
+		case "net", "gw", "fwd", "mac", "ips":
+		default:
+			return 0, nil, nil, false
+		}
 		fields[k] = v
 	}
 	netID, err := strconv.ParseUint(fields["net"], 10, 32)
-	if err != nil {
+	if err != nil || (netID != 0 && (netID < uint64(netid.FirstVNI) || netID > uint64(netid.LastVNI))) {
 		return 0, nil, nil, false
 	}
 	rawNet = uint32(netID)
@@ -106,6 +115,9 @@ func parseVethAlias(alias string) (rawNet uint32, ips []net.IP, mac net.Hardware
 	case "1":
 		rawNet |= PortForwardFlag
 	default:
+		return 0, nil, nil, false
+	}
+	if netID == 0 && rawNet != 0 {
 		return 0, nil, nil, false
 	}
 	mac, err = net.ParseMAC(fields["mac"])

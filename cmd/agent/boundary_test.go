@@ -97,11 +97,11 @@ func TestCompileBoundariesDistinguishesVPCUIDAfterVNIReuse(t *testing.T) {
 }
 
 func TestCompileBoundariesAbsentPolicyAndUnrealizedVNI(t *testing.T) {
-	legacy := boundaryTestVPC("scope-a", "legacy", "identity-legacy", 10, "10.40.0.0/24")
+	legacy := boundaryTestVPC("scope-a", "legacy", "identity-legacy", 110, "10.40.0.0/24")
 	pending := boundaryTestVPC("scope-a", "pending", "identity-pending", 0, "10.50.0.0/24")
 	pending.Spec.Boundary = &sdn.VPCBoundary{Revision: 2}
 	got, known, ports, err := compileBoundaries([]*sdn.VPC{legacy, pending}, nil)
-	if err != nil || len(got) != 0 || len(ports) != 0 || !reflect.DeepEqual(known, []uint32{10}) {
+	if err != nil || len(got) != 0 || len(ports) != 0 || !reflect.DeepEqual(known, []uint32{110}) {
 		t.Fatalf("legacy/pending compilation policy=%v known=%v error=%v", got, known, err)
 	}
 	legacy.Spec.Boundary = &sdn.VPCBoundary{Revision: 1}

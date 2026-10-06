@@ -232,6 +232,7 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["/usr/local/bin/sdn-controller"]
           args:
+            - --agent-image={{ .Values.image }}
             - --leader-elect=false
             - --metrics-bind-address=0
             - --health-probe-bind-address=:8081

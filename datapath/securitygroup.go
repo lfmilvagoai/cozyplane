@@ -136,6 +136,11 @@ func unionContaining(items []cidrGroup) []uint64 {
 func (m *Manager) SyncSGCidr(entries []SGCidr) error {
 	items := make([]cidrGroup, len(entries))
 	for i, e := range entries {
+		if e.CIDR != nil {
+			if _, _, err := cidrAddressPrefix(e.CIDR); err != nil {
+				return err
+			}
+		}
 		items[i] = cidrGroup{scope: e.Net, proto: e.Proto, port: e.Port, cidr: e.CIDR, groups: e.AllowedGroups}
 	}
 	groups := unionContaining(items)
@@ -144,16 +149,7 @@ func (m *Manager) SyncSGCidr(entries []SGCidr) error {
 		if e.CIDR == nil {
 			continue
 		}
-		ones, _ := e.CIDR.Mask.Size()
-		ip := e.CIDR.IP
-		var clientPrefix uint32
-		if v4 := ip.To4(); v4 != nil {
-			ip = v4
-			clientPrefix = 96 + uint32(ones) // NAT64 96-bit prefix ahead of the v4
-		} else {
-			clientPrefix = uint32(ones)
-		}
-		a, err := addr128(ip)
+		a, clientPrefix, err := cidrAddressPrefix(e.CIDR)
 		if err != nil {
 			return fmt.Errorf("sg_cidr client %q: %w", e.CIDR, err)
 		}
@@ -185,6 +181,11 @@ type SGEgressCidr struct {
 func (m *Manager) SyncSGEgressCidr(entries []SGEgressCidr) error {
 	items := make([]cidrGroup, len(entries))
 	for i, e := range entries {
+		if e.CIDR != nil {
+			if _, _, err := cidrAddressPrefix(e.CIDR); err != nil {
+				return err
+			}
+		}
 		items[i] = cidrGroup{scope: e.SrcNet, proto: e.Proto, port: e.Port, cidr: e.CIDR, groups: e.AllowedGroups}
 	}
 	groups := unionContaining(items)
@@ -193,16 +194,7 @@ func (m *Manager) SyncSGEgressCidr(entries []SGEgressCidr) error {
 		if e.CIDR == nil {
 			continue
 		}
-		ones, _ := e.CIDR.Mask.Size()
-		ip := e.CIDR.IP
-		var destPrefix uint32
-		if v4 := ip.To4(); v4 != nil {
-			ip = v4
-			destPrefix = 96 + uint32(ones)
-		} else {
-			destPrefix = uint32(ones)
-		}
-		a, err := addr128(ip)
+		a, destPrefix, err := cidrAddressPrefix(e.CIDR)
 		if err != nil {
 			return fmt.Errorf("sg_egress_cidr dest %q: %w", e.CIDR, err)
 		}

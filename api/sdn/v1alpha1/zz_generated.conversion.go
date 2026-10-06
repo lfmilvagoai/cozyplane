@@ -22,10 +22,7 @@ limitations under the License.
 package v1alpha1
 
 import (
-	unsafe "unsafe"
-
 	sdn "github.com/lllamnyp/cozyplane/api/sdn"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -864,7 +861,17 @@ func Convert_sdn_FloatingIP_To_v1alpha1_FloatingIP(in *sdn.FloatingIP, out *Floa
 
 func autoConvert_v1alpha1_FloatingIPList_To_sdn_FloatingIPList(in *FloatingIPList, out *sdn.FloatingIPList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.FloatingIP)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.FloatingIP, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_FloatingIP_To_sdn_FloatingIP(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -875,7 +882,17 @@ func Convert_v1alpha1_FloatingIPList_To_sdn_FloatingIPList(in *FloatingIPList, o
 
 func autoConvert_sdn_FloatingIPList_To_v1alpha1_FloatingIPList(in *sdn.FloatingIPList, out *FloatingIPList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]FloatingIP)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]FloatingIP, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_FloatingIP_To_v1alpha1_FloatingIP(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -917,7 +934,7 @@ func Convert_sdn_FloatingIPSpec_To_v1alpha1_FloatingIPSpec(in *sdn.FloatingIPSpe
 func autoConvert_v1alpha1_FloatingIPStatus_To_sdn_FloatingIPStatus(in *FloatingIPStatus, out *sdn.FloatingIPStatus, s conversion.Scope) error {
 	out.Address = in.Address
 	out.Phase = sdn.FloatingIPPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -929,7 +946,7 @@ func Convert_v1alpha1_FloatingIPStatus_To_sdn_FloatingIPStatus(in *FloatingIPSta
 func autoConvert_sdn_FloatingIPStatus_To_v1alpha1_FloatingIPStatus(in *sdn.FloatingIPStatus, out *FloatingIPStatus, s conversion.Scope) error {
 	out.Address = in.Address
 	out.Phase = FloatingIPPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -971,8 +988,28 @@ func Convert_sdn_HostFirewall_To_v1alpha1_HostFirewall(in *sdn.HostFirewall, out
 }
 
 func autoConvert_v1alpha1_HostFirewallEgressRule_To_sdn_HostFirewallEgressRule(in *HostFirewallEgressRule, out *sdn.HostFirewallEgressRule, s conversion.Scope) error {
-	out.To = *(*[]sdn.HostFirewallPeer)(unsafe.Pointer(&in.To))
-	out.Ports = *(*[]sdn.HostFirewallPort)(unsafe.Pointer(&in.Ports))
+	if in.To != nil {
+		in, out := &in.To, &out.To
+		*out = make([]sdn.HostFirewallPeer, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallPeer_To_sdn_HostFirewallPeer(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.To = nil
+	}
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.HostFirewallPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallPort_To_sdn_HostFirewallPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -982,8 +1019,28 @@ func Convert_v1alpha1_HostFirewallEgressRule_To_sdn_HostFirewallEgressRule(in *H
 }
 
 func autoConvert_sdn_HostFirewallEgressRule_To_v1alpha1_HostFirewallEgressRule(in *sdn.HostFirewallEgressRule, out *HostFirewallEgressRule, s conversion.Scope) error {
-	out.To = *(*[]HostFirewallPeer)(unsafe.Pointer(&in.To))
-	out.Ports = *(*[]HostFirewallPort)(unsafe.Pointer(&in.Ports))
+	if in.To != nil {
+		in, out := &in.To, &out.To
+		*out = make([]HostFirewallPeer, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallPeer_To_v1alpha1_HostFirewallPeer(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.To = nil
+	}
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]HostFirewallPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallPort_To_v1alpha1_HostFirewallPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -994,7 +1051,17 @@ func Convert_sdn_HostFirewallEgressRule_To_v1alpha1_HostFirewallEgressRule(in *s
 
 func autoConvert_v1alpha1_HostFirewallList_To_sdn_HostFirewallList(in *HostFirewallList, out *sdn.HostFirewallList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.HostFirewall)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.HostFirewall, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewall_To_sdn_HostFirewall(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1005,7 +1072,17 @@ func Convert_v1alpha1_HostFirewallList_To_sdn_HostFirewallList(in *HostFirewallL
 
 func autoConvert_sdn_HostFirewallList_To_v1alpha1_HostFirewallList(in *sdn.HostFirewallList, out *HostFirewallList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]HostFirewall)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]HostFirewall, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewall_To_v1alpha1_HostFirewall(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1016,7 +1093,7 @@ func Convert_sdn_HostFirewallList_To_v1alpha1_HostFirewallList(in *sdn.HostFirew
 
 func autoConvert_v1alpha1_HostFirewallPeer_To_sdn_HostFirewallPeer(in *HostFirewallPeer, out *sdn.HostFirewallPeer, s conversion.Scope) error {
 	out.CIDR = in.CIDR
-	out.Except = *(*[]string)(unsafe.Pointer(&in.Except))
+	out.Except = in.Except
 	return nil
 }
 
@@ -1027,7 +1104,7 @@ func Convert_v1alpha1_HostFirewallPeer_To_sdn_HostFirewallPeer(in *HostFirewallP
 
 func autoConvert_sdn_HostFirewallPeer_To_v1alpha1_HostFirewallPeer(in *sdn.HostFirewallPeer, out *HostFirewallPeer, s conversion.Scope) error {
 	out.CIDR = in.CIDR
-	out.Except = *(*[]string)(unsafe.Pointer(&in.Except))
+	out.Except = in.Except
 	return nil
 }
 
@@ -1061,8 +1138,28 @@ func Convert_sdn_HostFirewallPort_To_v1alpha1_HostFirewallPort(in *sdn.HostFirew
 }
 
 func autoConvert_v1alpha1_HostFirewallRule_To_sdn_HostFirewallRule(in *HostFirewallRule, out *sdn.HostFirewallRule, s conversion.Scope) error {
-	out.From = *(*[]sdn.HostFirewallPeer)(unsafe.Pointer(&in.From))
-	out.Ports = *(*[]sdn.HostFirewallPort)(unsafe.Pointer(&in.Ports))
+	if in.From != nil {
+		in, out := &in.From, &out.From
+		*out = make([]sdn.HostFirewallPeer, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallPeer_To_sdn_HostFirewallPeer(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.From = nil
+	}
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.HostFirewallPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallPort_To_sdn_HostFirewallPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1072,8 +1169,28 @@ func Convert_v1alpha1_HostFirewallRule_To_sdn_HostFirewallRule(in *HostFirewallR
 }
 
 func autoConvert_sdn_HostFirewallRule_To_v1alpha1_HostFirewallRule(in *sdn.HostFirewallRule, out *HostFirewallRule, s conversion.Scope) error {
-	out.From = *(*[]HostFirewallPeer)(unsafe.Pointer(&in.From))
-	out.Ports = *(*[]HostFirewallPort)(unsafe.Pointer(&in.Ports))
+	if in.From != nil {
+		in, out := &in.From, &out.From
+		*out = make([]HostFirewallPeer, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallPeer_To_v1alpha1_HostFirewallPeer(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.From = nil
+	}
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]HostFirewallPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallPort_To_v1alpha1_HostFirewallPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1084,9 +1201,37 @@ func Convert_sdn_HostFirewallRule_To_v1alpha1_HostFirewallRule(in *sdn.HostFirew
 
 func autoConvert_v1alpha1_HostFirewallSpec_To_sdn_HostFirewallSpec(in *HostFirewallSpec, out *sdn.HostFirewallSpec, s conversion.Scope) error {
 	out.NodeSelector = in.NodeSelector
-	out.PolicyTypes = *(*[]sdn.HostFirewallPolicyType)(unsafe.Pointer(&in.PolicyTypes))
-	out.Ingress = *(*[]sdn.HostFirewallRule)(unsafe.Pointer(&in.Ingress))
-	out.Egress = *(*[]sdn.HostFirewallEgressRule)(unsafe.Pointer(&in.Egress))
+	if in.PolicyTypes != nil {
+		in, out := &in.PolicyTypes, &out.PolicyTypes
+		*out = make([]sdn.HostFirewallPolicyType, len(*in))
+		for i := range *in {
+			(*out)[i] = sdn.HostFirewallPolicyType((*in)[i])
+		}
+	} else {
+		out.PolicyTypes = nil
+	}
+	if in.Ingress != nil {
+		in, out := &in.Ingress, &out.Ingress
+		*out = make([]sdn.HostFirewallRule, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallRule_To_sdn_HostFirewallRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ingress = nil
+	}
+	if in.Egress != nil {
+		in, out := &in.Egress, &out.Egress
+		*out = make([]sdn.HostFirewallEgressRule, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_HostFirewallEgressRule_To_sdn_HostFirewallEgressRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Egress = nil
+	}
 	return nil
 }
 
@@ -1097,9 +1242,37 @@ func Convert_v1alpha1_HostFirewallSpec_To_sdn_HostFirewallSpec(in *HostFirewallS
 
 func autoConvert_sdn_HostFirewallSpec_To_v1alpha1_HostFirewallSpec(in *sdn.HostFirewallSpec, out *HostFirewallSpec, s conversion.Scope) error {
 	out.NodeSelector = in.NodeSelector
-	out.PolicyTypes = *(*[]HostFirewallPolicyType)(unsafe.Pointer(&in.PolicyTypes))
-	out.Ingress = *(*[]HostFirewallRule)(unsafe.Pointer(&in.Ingress))
-	out.Egress = *(*[]HostFirewallEgressRule)(unsafe.Pointer(&in.Egress))
+	if in.PolicyTypes != nil {
+		in, out := &in.PolicyTypes, &out.PolicyTypes
+		*out = make([]HostFirewallPolicyType, len(*in))
+		for i := range *in {
+			(*out)[i] = HostFirewallPolicyType((*in)[i])
+		}
+	} else {
+		out.PolicyTypes = nil
+	}
+	if in.Ingress != nil {
+		in, out := &in.Ingress, &out.Ingress
+		*out = make([]HostFirewallRule, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallRule_To_v1alpha1_HostFirewallRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ingress = nil
+	}
+	if in.Egress != nil {
+		in, out := &in.Egress, &out.Egress
+		*out = make([]HostFirewallEgressRule, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_HostFirewallEgressRule_To_v1alpha1_HostFirewallEgressRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Egress = nil
+	}
 	return nil
 }
 
@@ -1109,7 +1282,7 @@ func Convert_sdn_HostFirewallSpec_To_v1alpha1_HostFirewallSpec(in *sdn.HostFirew
 }
 
 func autoConvert_v1alpha1_HostFirewallStatus_To_sdn_HostFirewallStatus(in *HostFirewallStatus, out *sdn.HostFirewallStatus, s conversion.Scope) error {
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1119,7 +1292,7 @@ func Convert_v1alpha1_HostFirewallStatus_To_sdn_HostFirewallStatus(in *HostFirew
 }
 
 func autoConvert_sdn_HostFirewallStatus_To_v1alpha1_HostFirewallStatus(in *sdn.HostFirewallStatus, out *HostFirewallStatus, s conversion.Scope) error {
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1202,7 +1375,17 @@ func Convert_sdn_Port_To_v1alpha1_Port(in *sdn.Port, out *Port, s conversion.Sco
 
 func autoConvert_v1alpha1_PortList_To_sdn_PortList(in *PortList, out *sdn.PortList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.Port)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.Port, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_Port_To_sdn_Port(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1213,7 +1396,17 @@ func Convert_v1alpha1_PortList_To_sdn_PortList(in *PortList, out *sdn.PortList, 
 
 func autoConvert_sdn_PortList_To_v1alpha1_PortList(in *sdn.PortList, out *PortList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]Port)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]Port, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_Port_To_v1alpha1_Port(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1265,7 +1458,7 @@ func Convert_sdn_PortSpec_To_v1alpha1_PortSpec(in *sdn.PortSpec, out *PortSpec, 
 }
 
 func autoConvert_v1alpha1_PortStatus_To_sdn_PortStatus(in *PortStatus, out *sdn.PortStatus, s conversion.Scope) error {
-	out.Groups = *(*[]int32)(unsafe.Pointer(&in.Groups))
+	out.Groups = in.Groups
 	return nil
 }
 
@@ -1275,7 +1468,7 @@ func Convert_v1alpha1_PortStatus_To_sdn_PortStatus(in *PortStatus, out *sdn.Port
 }
 
 func autoConvert_sdn_PortStatus_To_v1alpha1_PortStatus(in *sdn.PortStatus, out *PortStatus, s conversion.Scope) error {
-	out.Groups = *(*[]int32)(unsafe.Pointer(&in.Groups))
+	out.Groups = in.Groups
 	return nil
 }
 
@@ -1320,7 +1513,17 @@ func autoConvert_v1alpha1_SecurityGroupEgressRule_To_sdn_SecurityGroupEgressRule
 	if err := Convert_v1alpha1_SecurityGroupPeer_To_sdn_SecurityGroupPeer(&in.To, &out.To, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]sdn.SecurityGroupPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.SecurityGroupPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_SecurityGroupPort_To_sdn_SecurityGroupPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1333,7 +1536,17 @@ func autoConvert_sdn_SecurityGroupEgressRule_To_v1alpha1_SecurityGroupEgressRule
 	if err := Convert_sdn_SecurityGroupPeer_To_v1alpha1_SecurityGroupPeer(&in.To, &out.To, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]SecurityGroupPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]SecurityGroupPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_SecurityGroupPort_To_v1alpha1_SecurityGroupPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1344,7 +1557,17 @@ func Convert_sdn_SecurityGroupEgressRule_To_v1alpha1_SecurityGroupEgressRule(in 
 
 func autoConvert_v1alpha1_SecurityGroupList_To_sdn_SecurityGroupList(in *SecurityGroupList, out *sdn.SecurityGroupList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.SecurityGroup)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.SecurityGroup, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_SecurityGroup_To_sdn_SecurityGroup(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1355,7 +1578,17 @@ func Convert_v1alpha1_SecurityGroupList_To_sdn_SecurityGroupList(in *SecurityGro
 
 func autoConvert_sdn_SecurityGroupList_To_v1alpha1_SecurityGroupList(in *sdn.SecurityGroupList, out *SecurityGroupList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]SecurityGroup)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]SecurityGroup, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_SecurityGroup_To_v1alpha1_SecurityGroup(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1366,7 +1599,15 @@ func Convert_sdn_SecurityGroupList_To_v1alpha1_SecurityGroupList(in *sdn.Securit
 
 func autoConvert_v1alpha1_SecurityGroupPeer_To_sdn_SecurityGroupPeer(in *SecurityGroupPeer, out *sdn.SecurityGroupPeer, s conversion.Scope) error {
 	out.Group = in.Group
-	out.VPC = (*sdn.VPCRef)(unsafe.Pointer(in.VPC))
+	if in.VPC != nil {
+		in, out := &in.VPC, &out.VPC
+		*out = new(sdn.VPCRef)
+		if err := Convert_v1alpha1_VPCRef_To_sdn_VPCRef(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.VPC = nil
+	}
 	out.CIDR = in.CIDR
 	return nil
 }
@@ -1378,7 +1619,15 @@ func Convert_v1alpha1_SecurityGroupPeer_To_sdn_SecurityGroupPeer(in *SecurityGro
 
 func autoConvert_sdn_SecurityGroupPeer_To_v1alpha1_SecurityGroupPeer(in *sdn.SecurityGroupPeer, out *SecurityGroupPeer, s conversion.Scope) error {
 	out.Group = in.Group
-	out.VPC = (*VPCRef)(unsafe.Pointer(in.VPC))
+	if in.VPC != nil {
+		in, out := &in.VPC, &out.VPC
+		*out = new(VPCRef)
+		if err := Convert_sdn_VPCRef_To_v1alpha1_VPCRef(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.VPC = nil
+	}
 	out.CIDR = in.CIDR
 	return nil
 }
@@ -1414,7 +1663,17 @@ func autoConvert_v1alpha1_SecurityGroupRule_To_sdn_SecurityGroupRule(in *Securit
 	if err := Convert_v1alpha1_SecurityGroupPeer_To_sdn_SecurityGroupPeer(&in.From, &out.From, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]sdn.SecurityGroupPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.SecurityGroupPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_SecurityGroupPort_To_sdn_SecurityGroupPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1427,7 +1686,17 @@ func autoConvert_sdn_SecurityGroupRule_To_v1alpha1_SecurityGroupRule(in *sdn.Sec
 	if err := Convert_sdn_SecurityGroupPeer_To_v1alpha1_SecurityGroupPeer(&in.From, &out.From, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]SecurityGroupPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]SecurityGroupPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_SecurityGroupPort_To_v1alpha1_SecurityGroupPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1441,8 +1710,28 @@ func autoConvert_v1alpha1_SecurityGroupSpec_To_sdn_SecurityGroupSpec(in *Securit
 		return err
 	}
 	out.PodSelector = in.PodSelector
-	out.Ingress = *(*[]sdn.SecurityGroupRule)(unsafe.Pointer(&in.Ingress))
-	out.Egress = *(*[]sdn.SecurityGroupEgressRule)(unsafe.Pointer(&in.Egress))
+	if in.Ingress != nil {
+		in, out := &in.Ingress, &out.Ingress
+		*out = make([]sdn.SecurityGroupRule, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_SecurityGroupRule_To_sdn_SecurityGroupRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ingress = nil
+	}
+	if in.Egress != nil {
+		in, out := &in.Egress, &out.Egress
+		*out = make([]sdn.SecurityGroupEgressRule, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_SecurityGroupEgressRule_To_sdn_SecurityGroupEgressRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Egress = nil
+	}
 	return nil
 }
 
@@ -1456,8 +1745,28 @@ func autoConvert_sdn_SecurityGroupSpec_To_v1alpha1_SecurityGroupSpec(in *sdn.Sec
 		return err
 	}
 	out.PodSelector = in.PodSelector
-	out.Ingress = *(*[]SecurityGroupRule)(unsafe.Pointer(&in.Ingress))
-	out.Egress = *(*[]SecurityGroupEgressRule)(unsafe.Pointer(&in.Egress))
+	if in.Ingress != nil {
+		in, out := &in.Ingress, &out.Ingress
+		*out = make([]SecurityGroupRule, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_SecurityGroupRule_To_v1alpha1_SecurityGroupRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ingress = nil
+	}
+	if in.Egress != nil {
+		in, out := &in.Egress, &out.Egress
+		*out = make([]SecurityGroupEgressRule, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_SecurityGroupEgressRule_To_v1alpha1_SecurityGroupEgressRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Egress = nil
+	}
 	return nil
 }
 
@@ -1469,7 +1778,7 @@ func Convert_sdn_SecurityGroupSpec_To_v1alpha1_SecurityGroupSpec(in *sdn.Securit
 func autoConvert_v1alpha1_SecurityGroupStatus_To_sdn_SecurityGroupStatus(in *SecurityGroupStatus, out *sdn.SecurityGroupStatus, s conversion.Scope) error {
 	out.ID = in.ID
 	out.Phase = sdn.SecurityGroupPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1481,7 +1790,7 @@ func Convert_v1alpha1_SecurityGroupStatus_To_sdn_SecurityGroupStatus(in *Securit
 func autoConvert_sdn_SecurityGroupStatus_To_v1alpha1_SecurityGroupStatus(in *sdn.SecurityGroupStatus, out *SecurityGroupStatus, s conversion.Scope) error {
 	out.ID = in.ID
 	out.Phase = SecurityGroupPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1546,7 +1855,17 @@ func Convert_sdn_ServiceVIP_To_v1alpha1_ServiceVIP(in *sdn.ServiceVIP, out *Serv
 
 func autoConvert_v1alpha1_ServiceVIPList_To_sdn_ServiceVIPList(in *ServiceVIPList, out *sdn.ServiceVIPList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.ServiceVIP)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.ServiceVIP, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_ServiceVIP_To_sdn_ServiceVIP(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1557,7 +1876,17 @@ func Convert_v1alpha1_ServiceVIPList_To_sdn_ServiceVIPList(in *ServiceVIPList, o
 
 func autoConvert_sdn_ServiceVIPList_To_v1alpha1_ServiceVIPList(in *sdn.ServiceVIPList, out *ServiceVIPList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]ServiceVIP)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]ServiceVIP, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_ServiceVIP_To_v1alpha1_ServiceVIP(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1574,7 +1903,17 @@ func autoConvert_v1alpha1_ServiceVIPSpec_To_sdn_ServiceVIPSpec(in *ServiceVIPSpe
 	if err := Convert_v1alpha1_ServiceRef_To_sdn_ServiceRef(&in.ServiceRef, &out.ServiceRef, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]sdn.VIPPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.VIPPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VIPPort_To_sdn_VIPPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	out.SessionAffinity = in.SessionAffinity
 	return nil
 }
@@ -1592,7 +1931,17 @@ func autoConvert_sdn_ServiceVIPSpec_To_v1alpha1_ServiceVIPSpec(in *sdn.ServiceVI
 	if err := Convert_sdn_ServiceRef_To_v1alpha1_ServiceRef(&in.ServiceRef, &out.ServiceRef, s); err != nil {
 		return err
 	}
-	out.Ports = *(*[]VIPPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]VIPPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VIPPort_To_v1alpha1_VIPPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	out.SessionAffinity = in.SessionAffinity
 	return nil
 }
@@ -1603,9 +1952,19 @@ func Convert_sdn_ServiceVIPSpec_To_v1alpha1_ServiceVIPSpec(in *sdn.ServiceVIPSpe
 }
 
 func autoConvert_v1alpha1_ServiceVIPStatus_To_sdn_ServiceVIPStatus(in *ServiceVIPStatus, out *sdn.ServiceVIPStatus, s conversion.Scope) error {
-	out.Backends = *(*[]sdn.VIPBackend)(unsafe.Pointer(&in.Backends))
+	if in.Backends != nil {
+		in, out := &in.Backends, &out.Backends
+		*out = make([]sdn.VIPBackend, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VIPBackend_To_sdn_VIPBackend(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Backends = nil
+	}
 	out.Phase = sdn.ServiceVIPPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1615,9 +1974,19 @@ func Convert_v1alpha1_ServiceVIPStatus_To_sdn_ServiceVIPStatus(in *ServiceVIPSta
 }
 
 func autoConvert_sdn_ServiceVIPStatus_To_v1alpha1_ServiceVIPStatus(in *sdn.ServiceVIPStatus, out *ServiceVIPStatus, s conversion.Scope) error {
-	out.Backends = *(*[]VIPBackend)(unsafe.Pointer(&in.Backends))
+	if in.Backends != nil {
+		in, out := &in.Backends, &out.Backends
+		*out = make([]VIPBackend, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VIPBackend_To_v1alpha1_VIPBackend(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Backends = nil
+	}
 	out.Phase = ServiceVIPPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -1628,7 +1997,17 @@ func Convert_sdn_ServiceVIPStatus_To_v1alpha1_ServiceVIPStatus(in *sdn.ServiceVI
 
 func autoConvert_v1alpha1_VIPBackend_To_sdn_VIPBackend(in *VIPBackend, out *sdn.VIPBackend, s conversion.Scope) error {
 	out.IP = in.IP
-	out.Ports = *(*[]sdn.VIPBackendPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]sdn.VIPBackendPort, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VIPBackendPort_To_sdn_VIPBackendPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1639,7 +2018,17 @@ func Convert_v1alpha1_VIPBackend_To_sdn_VIPBackend(in *VIPBackend, out *sdn.VIPB
 
 func autoConvert_sdn_VIPBackend_To_v1alpha1_VIPBackend(in *sdn.VIPBackend, out *VIPBackend, s conversion.Scope) error {
 	out.IP = in.IP
-	out.Ports = *(*[]VIPBackendPort)(unsafe.Pointer(&in.Ports))
+	if in.Ports != nil {
+		in, out := &in.Ports, &out.Ports
+		*out = make([]VIPBackendPort, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VIPBackendPort_To_v1alpha1_VIPBackendPort(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Ports = nil
+	}
 	return nil
 }
 
@@ -1756,7 +2145,17 @@ func Convert_sdn_VPCBinding_To_v1alpha1_VPCBinding(in *sdn.VPCBinding, out *VPCB
 
 func autoConvert_v1alpha1_VPCBindingList_To_sdn_VPCBindingList(in *VPCBindingList, out *sdn.VPCBindingList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.VPCBinding)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.VPCBinding, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCBinding_To_sdn_VPCBinding(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1767,7 +2166,17 @@ func Convert_v1alpha1_VPCBindingList_To_sdn_VPCBindingList(in *VPCBindingList, o
 
 func autoConvert_sdn_VPCBindingList_To_v1alpha1_VPCBindingList(in *sdn.VPCBindingList, out *VPCBindingList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VPCBinding)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]VPCBinding, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCBinding_To_v1alpha1_VPCBinding(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1781,7 +2190,7 @@ func autoConvert_v1alpha1_VPCBindingSpec_To_sdn_VPCBindingSpec(in *VPCBindingSpe
 		return err
 	}
 	out.AllowForwarding = in.AllowForwarding
-	out.ForwardingCIDRs = *(*[]string)(unsafe.Pointer(&in.ForwardingCIDRs))
+	out.ForwardingCIDRs = in.ForwardingCIDRs
 	return nil
 }
 
@@ -1795,7 +2204,7 @@ func autoConvert_sdn_VPCBindingSpec_To_v1alpha1_VPCBindingSpec(in *sdn.VPCBindin
 		return err
 	}
 	out.AllowForwarding = in.AllowForwarding
-	out.ForwardingCIDRs = *(*[]string)(unsafe.Pointer(&in.ForwardingCIDRs))
+	out.ForwardingCIDRs = in.ForwardingCIDRs
 	return nil
 }
 
@@ -1807,7 +2216,17 @@ func Convert_sdn_VPCBindingSpec_To_v1alpha1_VPCBindingSpec(in *sdn.VPCBindingSpe
 func autoConvert_v1alpha1_VPCBoundary_To_sdn_VPCBoundary(in *VPCBoundary, out *sdn.VPCBoundary, s conversion.Scope) error {
 	out.Revision = in.Revision
 	out.Internet = in.Internet
-	out.Peers = *(*[]sdn.VPCBoundaryRule)(unsafe.Pointer(&in.Peers))
+	if in.Peers != nil {
+		in, out := &in.Peers, &out.Peers
+		*out = make([]sdn.VPCBoundaryRule, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCBoundaryRule_To_sdn_VPCBoundaryRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Peers = nil
+	}
 	return nil
 }
 
@@ -1819,7 +2238,17 @@ func Convert_v1alpha1_VPCBoundary_To_sdn_VPCBoundary(in *VPCBoundary, out *sdn.V
 func autoConvert_sdn_VPCBoundary_To_v1alpha1_VPCBoundary(in *sdn.VPCBoundary, out *VPCBoundary, s conversion.Scope) error {
 	out.Revision = in.Revision
 	out.Internet = in.Internet
-	out.Peers = *(*[]VPCBoundaryRule)(unsafe.Pointer(&in.Peers))
+	if in.Peers != nil {
+		in, out := &in.Peers, &out.Peers
+		*out = make([]VPCBoundaryRule, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCBoundaryRule_To_v1alpha1_VPCBoundaryRule(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Peers = nil
+	}
 	return nil
 }
 
@@ -1864,9 +2293,9 @@ func autoConvert_v1alpha1_VPCBoundaryRule_To_sdn_VPCBoundaryRule(in *VPCBoundary
 	}
 	out.Direction = in.Direction
 	out.Protocol = in.Protocol
-	out.Ports = *(*[]int32)(unsafe.Pointer(&in.Ports))
-	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
-	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
+	out.Ports = in.Ports
+	out.ICMPType = in.ICMPType
+	out.ICMPCode = in.ICMPCode
 	return nil
 }
 
@@ -1881,9 +2310,9 @@ func autoConvert_sdn_VPCBoundaryRule_To_v1alpha1_VPCBoundaryRule(in *sdn.VPCBoun
 	}
 	out.Direction = in.Direction
 	out.Protocol = in.Protocol
-	out.Ports = *(*[]int32)(unsafe.Pointer(&in.Ports))
-	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
-	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
+	out.Ports = in.Ports
+	out.ICMPType = in.ICMPType
+	out.ICMPCode = in.ICMPCode
 	return nil
 }
 
@@ -2033,7 +2462,7 @@ func Convert_sdn_VPCGatewayNAT_To_v1alpha1_VPCGatewayNAT(in *sdn.VPCGatewayNAT, 
 }
 
 func autoConvert_v1alpha1_VPCGatewayRoute_To_sdn_VPCGatewayRoute(in *VPCGatewayRoute, out *sdn.VPCGatewayRoute, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	if err := Convert_v1alpha1_VPCGatewayVia_To_sdn_VPCGatewayVia(&in.Via, &out.Via, s); err != nil {
 		return err
 	}
@@ -2046,7 +2475,7 @@ func Convert_v1alpha1_VPCGatewayRoute_To_sdn_VPCGatewayRoute(in *VPCGatewayRoute
 }
 
 func autoConvert_sdn_VPCGatewayRoute_To_v1alpha1_VPCGatewayRoute(in *sdn.VPCGatewayRoute, out *VPCGatewayRoute, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	if err := Convert_sdn_VPCGatewayVia_To_v1alpha1_VPCGatewayVia(&in.Via, &out.Via, s); err != nil {
 		return err
 	}
@@ -2059,9 +2488,9 @@ func Convert_sdn_VPCGatewayRoute_To_v1alpha1_VPCGatewayRoute(in *sdn.VPCGatewayR
 }
 
 func autoConvert_v1alpha1_VPCGatewayRouteStatus_To_sdn_VPCGatewayRouteStatus(in *VPCGatewayRouteStatus, out *sdn.VPCGatewayRouteStatus, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	out.Port = in.Port
-	out.Ports = *(*[]string)(unsafe.Pointer(&in.Ports))
+	out.Ports = in.Ports
 	return nil
 }
 
@@ -2071,9 +2500,9 @@ func Convert_v1alpha1_VPCGatewayRouteStatus_To_sdn_VPCGatewayRouteStatus(in *VPC
 }
 
 func autoConvert_sdn_VPCGatewayRouteStatus_To_v1alpha1_VPCGatewayRouteStatus(in *sdn.VPCGatewayRouteStatus, out *VPCGatewayRouteStatus, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	out.Port = in.Port
-	out.Ports = *(*[]string)(unsafe.Pointer(&in.Ports))
+	out.Ports = in.Ports
 	return nil
 }
 
@@ -2093,8 +2522,26 @@ func autoConvert_v1alpha1_VPCGatewaySpec_To_sdn_VPCGatewaySpec(in *VPCGatewaySpe
 	if err := Convert_v1alpha1_VPCGatewayIngress_To_sdn_VPCGatewayIngress(&in.Ingress, &out.Ingress, s); err != nil {
 		return err
 	}
-	out.Appliance = (*sdn.VPCGatewayAppliance)(unsafe.Pointer(in.Appliance))
-	out.Routes = *(*[]sdn.VPCGatewayRoute)(unsafe.Pointer(&in.Routes))
+	if in.Appliance != nil {
+		in, out := &in.Appliance, &out.Appliance
+		*out = new(sdn.VPCGatewayAppliance)
+		if err := Convert_v1alpha1_VPCGatewayAppliance_To_sdn_VPCGatewayAppliance(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Appliance = nil
+	}
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]sdn.VPCGatewayRoute, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCGatewayRoute_To_sdn_VPCGatewayRoute(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	return nil
 }
 
@@ -2114,8 +2561,26 @@ func autoConvert_sdn_VPCGatewaySpec_To_v1alpha1_VPCGatewaySpec(in *sdn.VPCGatewa
 	if err := Convert_sdn_VPCGatewayIngress_To_v1alpha1_VPCGatewayIngress(&in.Ingress, &out.Ingress, s); err != nil {
 		return err
 	}
-	out.Appliance = (*VPCGatewayAppliance)(unsafe.Pointer(in.Appliance))
-	out.Routes = *(*[]VPCGatewayRoute)(unsafe.Pointer(&in.Routes))
+	if in.Appliance != nil {
+		in, out := &in.Appliance, &out.Appliance
+		*out = new(VPCGatewayAppliance)
+		if err := Convert_sdn_VPCGatewayAppliance_To_v1alpha1_VPCGatewayAppliance(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Appliance = nil
+	}
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]VPCGatewayRoute, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCGatewayRoute_To_v1alpha1_VPCGatewayRoute(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	return nil
 }
 
@@ -2128,9 +2593,19 @@ func autoConvert_v1alpha1_VPCGatewayStatus_To_sdn_VPCGatewayStatus(in *VPCGatewa
 	out.NATAddress = in.NATAddress
 	out.NATAddress6 = in.NATAddress6
 	out.AppliancePort = in.AppliancePort
-	out.Routes = *(*[]sdn.VPCGatewayRouteStatus)(unsafe.Pointer(&in.Routes))
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]sdn.VPCGatewayRouteStatus, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCGatewayRouteStatus_To_sdn_VPCGatewayRouteStatus(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	out.Phase = sdn.VPCGatewayPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2143,9 +2618,19 @@ func autoConvert_sdn_VPCGatewayStatus_To_v1alpha1_VPCGatewayStatus(in *sdn.VPCGa
 	out.NATAddress = in.NATAddress
 	out.NATAddress6 = in.NATAddress6
 	out.Phase = VPCGatewayPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	out.AppliancePort = in.AppliancePort
-	out.Routes = *(*[]VPCGatewayRouteStatus)(unsafe.Pointer(&in.Routes))
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]VPCGatewayRouteStatus, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCGatewayRouteStatus_To_v1alpha1_VPCGatewayRouteStatus(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	return nil
 }
 
@@ -2178,7 +2663,17 @@ func Convert_sdn_VPCGatewayVia_To_v1alpha1_VPCGatewayVia(in *sdn.VPCGatewayVia, 
 
 func autoConvert_v1alpha1_VPCList_To_sdn_VPCList(in *VPCList, out *sdn.VPCList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.VPC)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.VPC, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPC_To_sdn_VPC(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2189,7 +2684,17 @@ func Convert_v1alpha1_VPCList_To_sdn_VPCList(in *VPCList, out *sdn.VPCList, s co
 
 func autoConvert_sdn_VPCList_To_v1alpha1_VPCList(in *sdn.VPCList, out *VPCList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VPC)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]VPC, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPC_To_v1alpha1_VPC(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2232,7 +2737,17 @@ func Convert_sdn_VPCPeering_To_v1alpha1_VPCPeering(in *sdn.VPCPeering, out *VPCP
 
 func autoConvert_v1alpha1_VPCPeeringList_To_sdn_VPCPeeringList(in *VPCPeeringList, out *sdn.VPCPeeringList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.VPCPeering)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.VPCPeering, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCPeering_To_sdn_VPCPeering(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2243,7 +2758,17 @@ func Convert_v1alpha1_VPCPeeringList_To_sdn_VPCPeeringList(in *VPCPeeringList, o
 
 func autoConvert_sdn_VPCPeeringList_To_v1alpha1_VPCPeeringList(in *sdn.VPCPeeringList, out *VPCPeeringList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VPCPeering)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]VPCPeering, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCPeering_To_v1alpha1_VPCPeering(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2285,7 +2810,7 @@ func Convert_sdn_VPCPeeringSpec_To_v1alpha1_VPCPeeringSpec(in *sdn.VPCPeeringSpe
 func autoConvert_v1alpha1_VPCPeeringStatus_To_sdn_VPCPeeringStatus(in *VPCPeeringStatus, out *sdn.VPCPeeringStatus, s conversion.Scope) error {
 	out.Phase = sdn.VPCPeeringPhase(in.Phase)
 	out.PeerVNI = in.PeerVNI
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2297,7 +2822,7 @@ func Convert_v1alpha1_VPCPeeringStatus_To_sdn_VPCPeeringStatus(in *VPCPeeringSta
 func autoConvert_sdn_VPCPeeringStatus_To_v1alpha1_VPCPeeringStatus(in *sdn.VPCPeeringStatus, out *VPCPeeringStatus, s conversion.Scope) error {
 	out.Phase = VPCPeeringPhase(in.Phase)
 	out.PeerVNI = in.PeerVNI
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2329,9 +2854,17 @@ func Convert_sdn_VPCRef_To_v1alpha1_VPCRef(in *sdn.VPCRef, out *VPCRef, s conver
 }
 
 func autoConvert_v1alpha1_VPCSpec_To_sdn_VPCSpec(in *VPCSpec, out *sdn.VPCSpec, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	out.MTU = in.MTU
-	out.Boundary = (*sdn.VPCBoundary)(unsafe.Pointer(in.Boundary))
+	if in.Boundary != nil {
+		in, out := &in.Boundary, &out.Boundary
+		*out = new(sdn.VPCBoundary)
+		if err := Convert_v1alpha1_VPCBoundary_To_sdn_VPCBoundary(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Boundary = nil
+	}
 	return nil
 }
 
@@ -2341,9 +2874,17 @@ func Convert_v1alpha1_VPCSpec_To_sdn_VPCSpec(in *VPCSpec, out *sdn.VPCSpec, s co
 }
 
 func autoConvert_sdn_VPCSpec_To_v1alpha1_VPCSpec(in *sdn.VPCSpec, out *VPCSpec, s conversion.Scope) error {
-	out.CIDRs = *(*[]string)(unsafe.Pointer(&in.CIDRs))
+	out.CIDRs = in.CIDRs
 	out.MTU = in.MTU
-	out.Boundary = (*VPCBoundary)(unsafe.Pointer(in.Boundary))
+	if in.Boundary != nil {
+		in, out := &in.Boundary, &out.Boundary
+		*out = new(VPCBoundary)
+		if err := Convert_sdn_VPCBoundary_To_v1alpha1_VPCBoundary(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Boundary = nil
+	}
 	return nil
 }
 
@@ -2355,8 +2896,18 @@ func Convert_sdn_VPCSpec_To_v1alpha1_VPCSpec(in *sdn.VPCSpec, out *VPCSpec, s co
 func autoConvert_v1alpha1_VPCStatus_To_sdn_VPCStatus(in *VPCStatus, out *sdn.VPCStatus, s conversion.Scope) error {
 	out.VNI = in.VNI
 	out.Phase = sdn.VPCPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
-	out.BoundaryNodes = *(*[]sdn.VPCBoundaryNode)(unsafe.Pointer(&in.BoundaryNodes))
+	out.Conditions = in.Conditions
+	if in.BoundaryNodes != nil {
+		in, out := &in.BoundaryNodes, &out.BoundaryNodes
+		*out = make([]sdn.VPCBoundaryNode, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCBoundaryNode_To_sdn_VPCBoundaryNode(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.BoundaryNodes = nil
+	}
 	return nil
 }
 
@@ -2368,8 +2919,18 @@ func Convert_v1alpha1_VPCStatus_To_sdn_VPCStatus(in *VPCStatus, out *sdn.VPCStat
 func autoConvert_sdn_VPCStatus_To_v1alpha1_VPCStatus(in *sdn.VPCStatus, out *VPCStatus, s conversion.Scope) error {
 	out.VNI = in.VNI
 	out.Phase = VPCPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
-	out.BoundaryNodes = *(*[]VPCBoundaryNode)(unsafe.Pointer(&in.BoundaryNodes))
+	out.Conditions = in.Conditions
+	if in.BoundaryNodes != nil {
+		in, out := &in.BoundaryNodes, &out.BoundaryNodes
+		*out = make([]VPCBoundaryNode, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCBoundaryNode_To_v1alpha1_VPCBoundaryNode(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.BoundaryNodes = nil
+	}
 	return nil
 }
 
@@ -2415,7 +2976,7 @@ func autoConvert_v1alpha1_VPNConnectionIPsec_To_sdn_VPNConnectionIPsec(in *VPNCo
 	if err := Convert_v1alpha1_VPNConnectionIPsecAuth_To_sdn_VPNConnectionIPsecAuth(&in.Auth, &out.Auth, s); err != nil {
 		return err
 	}
-	out.Proposals = *(*[]string)(unsafe.Pointer(&in.Proposals))
+	out.Proposals = in.Proposals
 	out.DPDDelay = in.DPDDelay
 	out.StartAction = sdn.VPNIPsecStartAction(in.StartAction)
 	out.AddressPool = in.AddressPool
@@ -2432,7 +2993,7 @@ func autoConvert_sdn_VPNConnectionIPsec_To_v1alpha1_VPNConnectionIPsec(in *sdn.V
 	if err := Convert_sdn_VPNConnectionIPsecAuth_To_v1alpha1_VPNConnectionIPsecAuth(&in.Auth, &out.Auth, s); err != nil {
 		return err
 	}
-	out.Proposals = *(*[]string)(unsafe.Pointer(&in.Proposals))
+	out.Proposals = in.Proposals
 	out.DPDDelay = in.DPDDelay
 	out.StartAction = VPNIPsecStartAction(in.StartAction)
 	out.AddressPool = in.AddressPool
@@ -2446,8 +3007,24 @@ func Convert_sdn_VPNConnectionIPsec_To_v1alpha1_VPNConnectionIPsec(in *sdn.VPNCo
 
 func autoConvert_v1alpha1_VPNConnectionIPsecAuth_To_sdn_VPNConnectionIPsecAuth(in *VPNConnectionIPsecAuth, out *sdn.VPNConnectionIPsecAuth, s conversion.Scope) error {
 	out.PSKSecretRef = in.PSKSecretRef
-	out.Certificate = (*sdn.VPNIPsecCertificateAuth)(unsafe.Pointer(in.Certificate))
-	out.EAP = (*sdn.VPNIPsecEAPAuth)(unsafe.Pointer(in.EAP))
+	if in.Certificate != nil {
+		in, out := &in.Certificate, &out.Certificate
+		*out = new(sdn.VPNIPsecCertificateAuth)
+		if err := Convert_v1alpha1_VPNIPsecCertificateAuth_To_sdn_VPNIPsecCertificateAuth(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Certificate = nil
+	}
+	if in.EAP != nil {
+		in, out := &in.EAP, &out.EAP
+		*out = new(sdn.VPNIPsecEAPAuth)
+		if err := Convert_v1alpha1_VPNIPsecEAPAuth_To_sdn_VPNIPsecEAPAuth(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.EAP = nil
+	}
 	return nil
 }
 
@@ -2458,8 +3035,24 @@ func Convert_v1alpha1_VPNConnectionIPsecAuth_To_sdn_VPNConnectionIPsecAuth(in *V
 
 func autoConvert_sdn_VPNConnectionIPsecAuth_To_v1alpha1_VPNConnectionIPsecAuth(in *sdn.VPNConnectionIPsecAuth, out *VPNConnectionIPsecAuth, s conversion.Scope) error {
 	out.PSKSecretRef = in.PSKSecretRef
-	out.Certificate = (*VPNIPsecCertificateAuth)(unsafe.Pointer(in.Certificate))
-	out.EAP = (*VPNIPsecEAPAuth)(unsafe.Pointer(in.EAP))
+	if in.Certificate != nil {
+		in, out := &in.Certificate, &out.Certificate
+		*out = new(VPNIPsecCertificateAuth)
+		if err := Convert_sdn_VPNIPsecCertificateAuth_To_v1alpha1_VPNIPsecCertificateAuth(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Certificate = nil
+	}
+	if in.EAP != nil {
+		in, out := &in.EAP, &out.EAP
+		*out = new(VPNIPsecEAPAuth)
+		if err := Convert_sdn_VPNIPsecEAPAuth_To_v1alpha1_VPNIPsecEAPAuth(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.EAP = nil
+	}
 	return nil
 }
 
@@ -2470,7 +3063,17 @@ func Convert_sdn_VPNConnectionIPsecAuth_To_v1alpha1_VPNConnectionIPsecAuth(in *s
 
 func autoConvert_v1alpha1_VPNConnectionList_To_sdn_VPNConnectionList(in *VPNConnectionList, out *sdn.VPNConnectionList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.VPNConnection)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.VPNConnection, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPNConnection_To_sdn_VPNConnection(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2481,7 +3084,17 @@ func Convert_v1alpha1_VPNConnectionList_To_sdn_VPNConnectionList(in *VPNConnecti
 
 func autoConvert_sdn_VPNConnectionList_To_v1alpha1_VPNConnectionList(in *sdn.VPNConnectionList, out *VPNConnectionList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VPNConnection)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]VPNConnection, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPNConnection_To_v1alpha1_VPNConnection(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2494,9 +3107,25 @@ func autoConvert_v1alpha1_VPNConnectionSpec_To_sdn_VPNConnectionSpec(in *VPNConn
 	if err := Convert_v1alpha1_LocalVPNGatewayRef_To_sdn_LocalVPNGatewayRef(&in.GatewayRef, &out.GatewayRef, s); err != nil {
 		return err
 	}
-	out.RemoteCIDRs = *(*[]string)(unsafe.Pointer(&in.RemoteCIDRs))
-	out.WireGuard = (*sdn.VPNConnectionWireGuard)(unsafe.Pointer(in.WireGuard))
-	out.IPsec = (*sdn.VPNConnectionIPsec)(unsafe.Pointer(in.IPsec))
+	out.RemoteCIDRs = in.RemoteCIDRs
+	if in.WireGuard != nil {
+		in, out := &in.WireGuard, &out.WireGuard
+		*out = new(sdn.VPNConnectionWireGuard)
+		if err := Convert_v1alpha1_VPNConnectionWireGuard_To_sdn_VPNConnectionWireGuard(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WireGuard = nil
+	}
+	if in.IPsec != nil {
+		in, out := &in.IPsec, &out.IPsec
+		*out = new(sdn.VPNConnectionIPsec)
+		if err := Convert_v1alpha1_VPNConnectionIPsec_To_sdn_VPNConnectionIPsec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.IPsec = nil
+	}
 	return nil
 }
 
@@ -2509,9 +3138,25 @@ func autoConvert_sdn_VPNConnectionSpec_To_v1alpha1_VPNConnectionSpec(in *sdn.VPN
 	if err := Convert_sdn_LocalVPNGatewayRef_To_v1alpha1_LocalVPNGatewayRef(&in.GatewayRef, &out.GatewayRef, s); err != nil {
 		return err
 	}
-	out.RemoteCIDRs = *(*[]string)(unsafe.Pointer(&in.RemoteCIDRs))
-	out.WireGuard = (*VPNConnectionWireGuard)(unsafe.Pointer(in.WireGuard))
-	out.IPsec = (*VPNConnectionIPsec)(unsafe.Pointer(in.IPsec))
+	out.RemoteCIDRs = in.RemoteCIDRs
+	if in.WireGuard != nil {
+		in, out := &in.WireGuard, &out.WireGuard
+		*out = new(VPNConnectionWireGuard)
+		if err := Convert_sdn_VPNConnectionWireGuard_To_v1alpha1_VPNConnectionWireGuard(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WireGuard = nil
+	}
+	if in.IPsec != nil {
+		in, out := &in.IPsec, &out.IPsec
+		*out = new(VPNConnectionIPsec)
+		if err := Convert_sdn_VPNConnectionIPsec_To_v1alpha1_VPNConnectionIPsec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.IPsec = nil
+	}
 	return nil
 }
 
@@ -2522,10 +3167,10 @@ func Convert_sdn_VPNConnectionSpec_To_v1alpha1_VPNConnectionSpec(in *sdn.VPNConn
 
 func autoConvert_v1alpha1_VPNConnectionStatus_To_sdn_VPNConnectionStatus(in *VPNConnectionStatus, out *sdn.VPNConnectionStatus, s conversion.Scope) error {
 	out.Phase = sdn.VPNConnectionPhase(in.Phase)
-	out.LastHandshake = (*v1.Time)(unsafe.Pointer(in.LastHandshake))
-	out.ObservedAt = (*v1.Time)(unsafe.Pointer(in.ObservedAt))
-	out.AssignedAddresses = *(*[]string)(unsafe.Pointer(&in.AssignedAddresses))
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.LastHandshake = in.LastHandshake
+	out.ObservedAt = in.ObservedAt
+	out.AssignedAddresses = in.AssignedAddresses
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2536,10 +3181,10 @@ func Convert_v1alpha1_VPNConnectionStatus_To_sdn_VPNConnectionStatus(in *VPNConn
 
 func autoConvert_sdn_VPNConnectionStatus_To_v1alpha1_VPNConnectionStatus(in *sdn.VPNConnectionStatus, out *VPNConnectionStatus, s conversion.Scope) error {
 	out.Phase = VPNConnectionPhase(in.Phase)
-	out.LastHandshake = (*v1.Time)(unsafe.Pointer(in.LastHandshake))
-	out.ObservedAt = (*v1.Time)(unsafe.Pointer(in.ObservedAt))
-	out.AssignedAddresses = *(*[]string)(unsafe.Pointer(&in.AssignedAddresses))
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.LastHandshake = in.LastHandshake
+	out.ObservedAt = in.ObservedAt
+	out.AssignedAddresses = in.AssignedAddresses
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2550,9 +3195,9 @@ func Convert_sdn_VPNConnectionStatus_To_v1alpha1_VPNConnectionStatus(in *sdn.VPN
 
 func autoConvert_v1alpha1_VPNConnectionWireGuard_To_sdn_VPNConnectionWireGuard(in *VPNConnectionWireGuard, out *sdn.VPNConnectionWireGuard, s conversion.Scope) error {
 	out.PeerPublicKey = in.PeerPublicKey
-	out.PeerPublicKeys = *(*[]string)(unsafe.Pointer(&in.PeerPublicKeys))
+	out.PeerPublicKeys = in.PeerPublicKeys
 	out.PeerEndpoint = in.PeerEndpoint
-	out.PeerEndpoints = *(*[]string)(unsafe.Pointer(&in.PeerEndpoints))
+	out.PeerEndpoints = in.PeerEndpoints
 	out.PresharedKeySecretRef = in.PresharedKeySecretRef
 	out.PersistentKeepalive = in.PersistentKeepalive
 	return nil
@@ -2565,9 +3210,9 @@ func Convert_v1alpha1_VPNConnectionWireGuard_To_sdn_VPNConnectionWireGuard(in *V
 
 func autoConvert_sdn_VPNConnectionWireGuard_To_v1alpha1_VPNConnectionWireGuard(in *sdn.VPNConnectionWireGuard, out *VPNConnectionWireGuard, s conversion.Scope) error {
 	out.PeerPublicKey = in.PeerPublicKey
-	out.PeerPublicKeys = *(*[]string)(unsafe.Pointer(&in.PeerPublicKeys))
+	out.PeerPublicKeys = in.PeerPublicKeys
 	out.PeerEndpoint = in.PeerEndpoint
-	out.PeerEndpoints = *(*[]string)(unsafe.Pointer(&in.PeerEndpoints))
+	out.PeerEndpoints = in.PeerEndpoints
 	out.PresharedKeySecretRef = in.PresharedKeySecretRef
 	out.PersistentKeepalive = in.PersistentKeepalive
 	return nil
@@ -2581,7 +3226,7 @@ func Convert_sdn_VPNConnectionWireGuard_To_v1alpha1_VPNConnectionWireGuard(in *s
 func autoConvert_v1alpha1_VPNExternalAddress_To_sdn_VPNExternalAddress(in *VPNExternalAddress, out *sdn.VPNExternalAddress, s conversion.Scope) error {
 	out.LoadBalancerClass = in.LoadBalancerClass
 	out.AddressClaimName = in.AddressClaimName
-	out.AddressClaimNames = *(*[]string)(unsafe.Pointer(&in.AddressClaimNames))
+	out.AddressClaimNames = in.AddressClaimNames
 	return nil
 }
 
@@ -2593,7 +3238,7 @@ func Convert_v1alpha1_VPNExternalAddress_To_sdn_VPNExternalAddress(in *VPNExtern
 func autoConvert_sdn_VPNExternalAddress_To_v1alpha1_VPNExternalAddress(in *sdn.VPNExternalAddress, out *VPNExternalAddress, s conversion.Scope) error {
 	out.LoadBalancerClass = in.LoadBalancerClass
 	out.AddressClaimName = in.AddressClaimName
-	out.AddressClaimNames = *(*[]string)(unsafe.Pointer(&in.AddressClaimNames))
+	out.AddressClaimNames = in.AddressClaimNames
 	return nil
 }
 
@@ -2637,7 +3282,7 @@ func Convert_sdn_VPNGateway_To_v1alpha1_VPNGateway(in *sdn.VPNGateway, out *VPNG
 func autoConvert_v1alpha1_VPNGatewayActiveActive_To_sdn_VPNGatewayActiveActive(in *VPNGatewayActiveActive, out *sdn.VPNGatewayActiveActive, s conversion.Scope) error {
 	out.LocalASN = in.LocalASN
 	out.PeerASN = in.PeerASN
-	out.PeerAddresses = *(*[]string)(unsafe.Pointer(&in.PeerAddresses))
+	out.PeerAddresses = in.PeerAddresses
 	out.BFD = in.BFD
 	return nil
 }
@@ -2650,7 +3295,7 @@ func Convert_v1alpha1_VPNGatewayActiveActive_To_sdn_VPNGatewayActiveActive(in *V
 func autoConvert_sdn_VPNGatewayActiveActive_To_v1alpha1_VPNGatewayActiveActive(in *sdn.VPNGatewayActiveActive, out *VPNGatewayActiveActive, s conversion.Scope) error {
 	out.LocalASN = in.LocalASN
 	out.PeerASN = in.PeerASN
-	out.PeerAddresses = *(*[]string)(unsafe.Pointer(&in.PeerAddresses))
+	out.PeerAddresses = in.PeerAddresses
 	out.BFD = in.BFD
 	return nil
 }
@@ -2662,8 +3307,24 @@ func Convert_sdn_VPNGatewayActiveActive_To_v1alpha1_VPNGatewayActiveActive(in *s
 
 func autoConvert_v1alpha1_VPNGatewayHA_To_sdn_VPNGatewayHA(in *VPNGatewayHA, out *sdn.VPNGatewayHA, s conversion.Scope) error {
 	out.Mode = sdn.VPNGatewayHAMode(in.Mode)
-	out.ActiveActive = (*sdn.VPNGatewayActiveActive)(unsafe.Pointer(in.ActiveActive))
-	out.VirtualMachine = (*sdn.VPNGatewayVirtualMachine)(unsafe.Pointer(in.VirtualMachine))
+	if in.ActiveActive != nil {
+		in, out := &in.ActiveActive, &out.ActiveActive
+		*out = new(sdn.VPNGatewayActiveActive)
+		if err := Convert_v1alpha1_VPNGatewayActiveActive_To_sdn_VPNGatewayActiveActive(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.ActiveActive = nil
+	}
+	if in.VirtualMachine != nil {
+		in, out := &in.VirtualMachine, &out.VirtualMachine
+		*out = new(sdn.VPNGatewayVirtualMachine)
+		if err := Convert_v1alpha1_VPNGatewayVirtualMachine_To_sdn_VPNGatewayVirtualMachine(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.VirtualMachine = nil
+	}
 	return nil
 }
 
@@ -2674,8 +3335,24 @@ func Convert_v1alpha1_VPNGatewayHA_To_sdn_VPNGatewayHA(in *VPNGatewayHA, out *sd
 
 func autoConvert_sdn_VPNGatewayHA_To_v1alpha1_VPNGatewayHA(in *sdn.VPNGatewayHA, out *VPNGatewayHA, s conversion.Scope) error {
 	out.Mode = VPNGatewayHAMode(in.Mode)
-	out.ActiveActive = (*VPNGatewayActiveActive)(unsafe.Pointer(in.ActiveActive))
-	out.VirtualMachine = (*VPNGatewayVirtualMachine)(unsafe.Pointer(in.VirtualMachine))
+	if in.ActiveActive != nil {
+		in, out := &in.ActiveActive, &out.ActiveActive
+		*out = new(VPNGatewayActiveActive)
+		if err := Convert_sdn_VPNGatewayActiveActive_To_v1alpha1_VPNGatewayActiveActive(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.ActiveActive = nil
+	}
+	if in.VirtualMachine != nil {
+		in, out := &in.VirtualMachine, &out.VirtualMachine
+		*out = new(VPNGatewayVirtualMachine)
+		if err := Convert_sdn_VPNGatewayVirtualMachine_To_v1alpha1_VPNGatewayVirtualMachine(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.VirtualMachine = nil
+	}
 	return nil
 }
 
@@ -2685,11 +3362,21 @@ func Convert_sdn_VPNGatewayHA_To_v1alpha1_VPNGatewayHA(in *sdn.VPNGatewayHA, out
 }
 
 func autoConvert_v1alpha1_VPNGatewayIPsec_To_sdn_VPNGatewayIPsec(in *VPNGatewayIPsec, out *sdn.VPNGatewayIPsec, s conversion.Scope) error {
-	out.Proposals = *(*[]string)(unsafe.Pointer(&in.Proposals))
+	out.Proposals = in.Proposals
 	out.CredentialSecretRef = in.CredentialSecretRef
 	out.TrustedCASecretRef = in.TrustedCASecretRef
 	out.LocalIdentity = in.LocalIdentity
-	out.AddressPools = *(*[]sdn.VPNIPsecAddressPool)(unsafe.Pointer(&in.AddressPools))
+	if in.AddressPools != nil {
+		in, out := &in.AddressPools, &out.AddressPools
+		*out = make([]sdn.VPNIPsecAddressPool, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPNIPsecAddressPool_To_sdn_VPNIPsecAddressPool(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AddressPools = nil
+	}
 	return nil
 }
 
@@ -2699,11 +3386,21 @@ func Convert_v1alpha1_VPNGatewayIPsec_To_sdn_VPNGatewayIPsec(in *VPNGatewayIPsec
 }
 
 func autoConvert_sdn_VPNGatewayIPsec_To_v1alpha1_VPNGatewayIPsec(in *sdn.VPNGatewayIPsec, out *VPNGatewayIPsec, s conversion.Scope) error {
-	out.Proposals = *(*[]string)(unsafe.Pointer(&in.Proposals))
+	out.Proposals = in.Proposals
 	out.CredentialSecretRef = in.CredentialSecretRef
 	out.TrustedCASecretRef = in.TrustedCASecretRef
 	out.LocalIdentity = in.LocalIdentity
-	out.AddressPools = *(*[]VPNIPsecAddressPool)(unsafe.Pointer(&in.AddressPools))
+	if in.AddressPools != nil {
+		in, out := &in.AddressPools, &out.AddressPools
+		*out = make([]VPNIPsecAddressPool, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPNIPsecAddressPool_To_v1alpha1_VPNIPsecAddressPool(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AddressPools = nil
+	}
 	return nil
 }
 
@@ -2714,7 +3411,17 @@ func Convert_sdn_VPNGatewayIPsec_To_v1alpha1_VPNGatewayIPsec(in *sdn.VPNGatewayI
 
 func autoConvert_v1alpha1_VPNGatewayList_To_sdn_VPNGatewayList(in *VPNGatewayList, out *sdn.VPNGatewayList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]sdn.VPNGateway)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]sdn.VPNGateway, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPNGateway_To_sdn_VPNGateway(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2725,7 +3432,17 @@ func Convert_v1alpha1_VPNGatewayList_To_sdn_VPNGatewayList(in *VPNGatewayList, o
 
 func autoConvert_sdn_VPNGatewayList_To_v1alpha1_VPNGatewayList(in *sdn.VPNGatewayList, out *VPNGatewayList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VPNGateway)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]VPNGateway, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPNGateway_To_v1alpha1_VPNGateway(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -2738,14 +3455,48 @@ func autoConvert_v1alpha1_VPNGatewaySpec_To_sdn_VPNGatewaySpec(in *VPNGatewaySpe
 	if err := Convert_v1alpha1_LocalVPCRef_To_sdn_LocalVPCRef(&in.VPCRef, &out.VPCRef, s); err != nil {
 		return err
 	}
-	out.AdditionalVPCRefs = *(*[]sdn.LocalVPCRef)(unsafe.Pointer(&in.AdditionalVPCRefs))
-	out.WireGuard = (*sdn.VPNGatewayWireGuard)(unsafe.Pointer(in.WireGuard))
-	out.IPsec = (*sdn.VPNGatewayIPsec)(unsafe.Pointer(in.IPsec))
+	if in.AdditionalVPCRefs != nil {
+		in, out := &in.AdditionalVPCRefs, &out.AdditionalVPCRefs
+		*out = make([]sdn.LocalVPCRef, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_LocalVPCRef_To_sdn_LocalVPCRef(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AdditionalVPCRefs = nil
+	}
+	if in.WireGuard != nil {
+		in, out := &in.WireGuard, &out.WireGuard
+		*out = new(sdn.VPNGatewayWireGuard)
+		if err := Convert_v1alpha1_VPNGatewayWireGuard_To_sdn_VPNGatewayWireGuard(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WireGuard = nil
+	}
+	if in.IPsec != nil {
+		in, out := &in.IPsec, &out.IPsec
+		*out = new(sdn.VPNGatewayIPsec)
+		if err := Convert_v1alpha1_VPNGatewayIPsec_To_sdn_VPNGatewayIPsec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.IPsec = nil
+	}
 	if err := Convert_v1alpha1_VPNExternalAddress_To_sdn_VPNExternalAddress(&in.ExternalAddress, &out.ExternalAddress, s); err != nil {
 		return err
 	}
 	out.HighAvailability = in.HighAvailability
-	out.HA = (*sdn.VPNGatewayHA)(unsafe.Pointer(in.HA))
+	if in.HA != nil {
+		in, out := &in.HA, &out.HA
+		*out = new(sdn.VPNGatewayHA)
+		if err := Convert_v1alpha1_VPNGatewayHA_To_sdn_VPNGatewayHA(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.HA = nil
+	}
 	return nil
 }
 
@@ -2758,14 +3509,48 @@ func autoConvert_sdn_VPNGatewaySpec_To_v1alpha1_VPNGatewaySpec(in *sdn.VPNGatewa
 	if err := Convert_sdn_LocalVPCRef_To_v1alpha1_LocalVPCRef(&in.VPCRef, &out.VPCRef, s); err != nil {
 		return err
 	}
-	out.AdditionalVPCRefs = *(*[]LocalVPCRef)(unsafe.Pointer(&in.AdditionalVPCRefs))
-	out.WireGuard = (*VPNGatewayWireGuard)(unsafe.Pointer(in.WireGuard))
-	out.IPsec = (*VPNGatewayIPsec)(unsafe.Pointer(in.IPsec))
+	if in.AdditionalVPCRefs != nil {
+		in, out := &in.AdditionalVPCRefs, &out.AdditionalVPCRefs
+		*out = make([]LocalVPCRef, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_LocalVPCRef_To_v1alpha1_LocalVPCRef(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AdditionalVPCRefs = nil
+	}
+	if in.WireGuard != nil {
+		in, out := &in.WireGuard, &out.WireGuard
+		*out = new(VPNGatewayWireGuard)
+		if err := Convert_sdn_VPNGatewayWireGuard_To_v1alpha1_VPNGatewayWireGuard(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.WireGuard = nil
+	}
+	if in.IPsec != nil {
+		in, out := &in.IPsec, &out.IPsec
+		*out = new(VPNGatewayIPsec)
+		if err := Convert_sdn_VPNGatewayIPsec_To_v1alpha1_VPNGatewayIPsec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.IPsec = nil
+	}
 	if err := Convert_sdn_VPNExternalAddress_To_v1alpha1_VPNExternalAddress(&in.ExternalAddress, &out.ExternalAddress, s); err != nil {
 		return err
 	}
 	out.HighAvailability = in.HighAvailability
-	out.HA = (*VPNGatewayHA)(unsafe.Pointer(in.HA))
+	if in.HA != nil {
+		in, out := &in.HA, &out.HA
+		*out = new(VPNGatewayHA)
+		if err := Convert_sdn_VPNGatewayHA_To_v1alpha1_VPNGatewayHA(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.HA = nil
+	}
 	return nil
 }
 
@@ -2776,14 +3561,24 @@ func Convert_sdn_VPNGatewaySpec_To_v1alpha1_VPNGatewaySpec(in *sdn.VPNGatewaySpe
 
 func autoConvert_v1alpha1_VPNGatewayStatus_To_sdn_VPNGatewayStatus(in *VPNGatewayStatus, out *sdn.VPNGatewayStatus, s conversion.Scope) error {
 	out.Address = in.Address
-	out.Addresses = *(*[]string)(unsafe.Pointer(&in.Addresses))
+	out.Addresses = in.Addresses
 	out.PublicKey = in.PublicKey
-	out.PublicKeys = *(*[]string)(unsafe.Pointer(&in.PublicKeys))
+	out.PublicKeys = in.PublicKeys
 	out.AppliancePort = in.AppliancePort
-	out.AppliancePorts = *(*[]string)(unsafe.Pointer(&in.AppliancePorts))
-	out.Routes = *(*[]sdn.VPCGatewayRouteStatus)(unsafe.Pointer(&in.Routes))
+	out.AppliancePorts = in.AppliancePorts
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]sdn.VPCGatewayRouteStatus, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPCGatewayRouteStatus_To_sdn_VPCGatewayRouteStatus(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	out.Phase = sdn.VPNGatewayPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2794,14 +3589,24 @@ func Convert_v1alpha1_VPNGatewayStatus_To_sdn_VPNGatewayStatus(in *VPNGatewaySta
 
 func autoConvert_sdn_VPNGatewayStatus_To_v1alpha1_VPNGatewayStatus(in *sdn.VPNGatewayStatus, out *VPNGatewayStatus, s conversion.Scope) error {
 	out.Address = in.Address
-	out.Addresses = *(*[]string)(unsafe.Pointer(&in.Addresses))
+	out.Addresses = in.Addresses
 	out.PublicKey = in.PublicKey
-	out.PublicKeys = *(*[]string)(unsafe.Pointer(&in.PublicKeys))
+	out.PublicKeys = in.PublicKeys
 	out.AppliancePort = in.AppliancePort
-	out.AppliancePorts = *(*[]string)(unsafe.Pointer(&in.AppliancePorts))
-	out.Routes = *(*[]VPCGatewayRouteStatus)(unsafe.Pointer(&in.Routes))
+	out.AppliancePorts = in.AppliancePorts
+	if in.Routes != nil {
+		in, out := &in.Routes, &out.Routes
+		*out = make([]VPCGatewayRouteStatus, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPCGatewayRouteStatus_To_v1alpha1_VPCGatewayRouteStatus(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Routes = nil
+	}
 	out.Phase = VPNGatewayPhase(in.Phase)
-	out.Conditions = *(*[]v1.Condition)(unsafe.Pointer(&in.Conditions))
+	out.Conditions = in.Conditions
 	return nil
 }
 
@@ -2857,7 +3662,7 @@ func Convert_sdn_VPNGatewayWireGuard_To_v1alpha1_VPNGatewayWireGuard(in *sdn.VPN
 func autoConvert_v1alpha1_VPNIPsecAddressPool_To_sdn_VPNIPsecAddressPool(in *VPNIPsecAddressPool, out *sdn.VPNIPsecAddressPool, s conversion.Scope) error {
 	out.Name = in.Name
 	out.CIDR = in.CIDR
-	out.DNS = *(*[]string)(unsafe.Pointer(&in.DNS))
+	out.DNS = in.DNS
 	return nil
 }
 
@@ -2869,7 +3674,7 @@ func Convert_v1alpha1_VPNIPsecAddressPool_To_sdn_VPNIPsecAddressPool(in *VPNIPse
 func autoConvert_sdn_VPNIPsecAddressPool_To_v1alpha1_VPNIPsecAddressPool(in *sdn.VPNIPsecAddressPool, out *VPNIPsecAddressPool, s conversion.Scope) error {
 	out.Name = in.Name
 	out.CIDR = in.CIDR
-	out.DNS = *(*[]string)(unsafe.Pointer(&in.DNS))
+	out.DNS = in.DNS
 	return nil
 }
 

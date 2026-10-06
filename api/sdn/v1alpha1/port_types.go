@@ -24,6 +24,8 @@ import (
 // owner's namespace, not necessarily the referrer's.
 type VPCRef struct {
 	// Namespace is the namespace that owns the VPC.
+	// Omitted namespace resolves locally for namespaced binding consumers.
+	// +optional
 	Namespace string `json:"namespace"`
 	// Name is the VPC name within that namespace.
 	Name string `json:"name"`
@@ -95,10 +97,13 @@ type PortSpec struct {
 
 // PortStatus is the controller-observed state of a Port.
 type PortStatus struct {
-	// Groups is the set of SecurityGroup numeric ids (1..63, within the Port's
+	// Groups is the set of SecurityGroup numeric ids (1..62, within the Port's
 	// VPC) this Port is a member of, resolved by the controller from the pod's
 	// labels. The agent folds it into the datapath membership bitmap. Empty
 	// means "no groups" — legacy allow-all intra-VPC ingress.
+	// [0] alone means a selected SG is pending/invalid: deny new SG-gated
+	// TCP/UDP admissions until all selected group IDs are resolved. It is not
+	// full protocol quarantine. All agents must support this before activation.
 	// +optional
 	// +listType=atomic
 	Groups []int32 `json:"groups,omitempty"`

@@ -1,3 +1,7 @@
+# One tenant API distribution per regional cluster. Never switch in-place.
+api:
+  mode: aggregated
+
 # Container image for all cozyplane components (agent, CNI plugin, controller).
 # Digest-pinned (no floating tag). Built and published by .github/workflows/
 # release.yml on every push to main; see docs/packaging.md for how the digest is
@@ -130,11 +134,24 @@ exportPolicy:
 # before etcd, and before cozyplane's own aggregated apiserver, all of which run
 # as default-network pods.
 #
-# The tenant kinds (VPC, Port, SecurityGroup, HostFirewall, ...) are NOT CRDs.
-# They are served only by chart/cozyplane-apiserver: a group served by both a
-# CRD and an APIService makes the kube-apiserver's OpenAPI merge collide, and
-# `kubectl apply` then fails for every object in the group (docs/api-groups.md).
+# Tenant kinds use the explicit api.mode choice. CRD mode installs eleven
+# tenant CRDs and fail-closed admission; aggregated mode uses the separate
+# cozyplane-apiserver chart. Never install both for the same regional cluster.
 #
 # Disable only if you install these CRDs out-of-band.
 crds:
   enabled: true
+
+# CRD admission TLS uses cert-manager by default. An operator-provided Secret
+# requires its public CA bundle as well; skipping TLS verification is unsupported.
+admission:
+  replicas: 2
+  tls:
+    existingSecret: ""
+    caBundle: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

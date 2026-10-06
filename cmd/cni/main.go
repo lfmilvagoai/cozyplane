@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"net"
 	"os"
 	"strconv"
@@ -408,7 +409,7 @@ func addVPCs(ctx context.Context, args *skel.CmdArgs, conf *NetConf, atts []atta
 		if e != nil {
 			return fmt.Errorf("get vpc %s/%s: %w", a.VPCNamespace, a.VPCName, e)
 		}
-		if vpc.Status.VNI == 0 {
+		if !netid.ValidVNI(vpc.Status.VNI) {
 			return fmt.Errorf("vpc %s/%s is not ready (no VNI assigned yet)", a.VPCNamespace, a.VPCName)
 		}
 		if len(vpc.Spec.CIDRs) == 0 {
@@ -491,7 +492,7 @@ func addVPCs(ctx context.Context, args *skel.CmdArgs, conf *NetConf, atts []atta
 		// The ports-map value carries the net id and, for a granted forwarding
 		// leg, PORT_F_GATEWAY — the flag the datapath already uses for the VPC
 		// egress gateway, and which is exactly the semantics a router needs.
-		netID := uint32(r.vpc.Status.VNI)
+		netID := netid.VNI(r.vpc.Status.VNI)
 		if r.forwarding {
 			netID |= datapath.PortForwardFlag
 			if len(r.forwardingCIDRs) > 0 {
@@ -523,7 +524,7 @@ func addVPCs(ctx context.Context, args *skel.CmdArgs, conf *NetConf, atts []atta
 			// ARP/NDP for the fabric address, and node-originated traffic
 			// (kubelet probes, resolver replies) would die in FAILED resolution
 			// before reaching to_pod's DNAT.
-			if e := datapath.AddBridge(fabricIP.String(), vpcIP.String(), hostVeth, uint32(r.vpc.Status.VNI), podMAC); e != nil {
+			if e := datapath.AddBridge(fabricIP.String(), vpcIP.String(), hostVeth, netid.VNI(r.vpc.Status.VNI), podMAC); e != nil {
 				err = e
 				return err
 			}
@@ -536,7 +537,7 @@ func addVPCs(ctx context.Context, args *skel.CmdArgs, conf *NetConf, atts []atta
 		// not-yet-running VM. Everything else is staged now; the agent programs
 		// locals from the veth's alias record when cutover re-points spec.node.
 		if bound && port.Spec.Node != "" && port.Spec.Node != state.NodeName {
-			if e := datapath.DelLocal(uint32(r.vpc.Status.VNI), vpcIP); e != nil {
+			if e := datapath.DelLocal(netid.VNI(r.vpc.Status.VNI), vpcIP); e != nil {
 				err = e
 				return err
 			}
@@ -634,7 +635,7 @@ func addGatewayLeg(ctx context.Context, args *skel.CmdArgs, conf *NetConf, vpcNS
 	if gw == nil || !gw.Spec.NAT.Enabled {
 		return fmt.Errorf("vpc %s/%s has no gateway with NAT enabled (create a VPCGateway)", vpcNS, vpcName)
 	}
-	if vpc.Status.VNI == 0 {
+	if !netid.ValidVNI(vpc.Status.VNI) {
 		return fmt.Errorf("vpc %s/%s is not ready (no VNI assigned yet)", vpcNS, vpcName)
 	}
 	if len(vpc.Spec.CIDRs) == 0 {
@@ -754,7 +755,7 @@ func addGatewayLeg(ctx context.Context, args *skel.CmdArgs, conf *NetConf, vpcNS
 
 	// Host side is a normal VPC port, flagged as the gateway leg so the
 	// datapath blesses the off-VPC sources it forwards inward.
-	return configureHostVeth(hostVethName, []net.IP{gwIP}, uint32(vpc.Status.VNI)|datapath.PortGatewayFlag, podMAC, nil)
+	return configureHostVeth(hostVethName, []net.IP{gwIP}, netid.VNI(vpc.Status.VNI)|datapath.PortGatewayFlag, podMAC, nil)
 }
 
 // requireVPCBinding implements default-deny attachment: a VPCBinding in the
@@ -1231,6 +1232,10 @@ func configureHostVeth(name string, podIPs []net.IP, netID uint32, podMAC net.Ha
 	}
 
 	idx := hv.Attrs().Index
+	index, err := datapath.Ifindex(idx)
+	if err != nil {
+		return err
+	}
 
 	// A default-network pod has a unique IP, reached by the host through a
 	// main-table host route (one per family). VPC pods are delivered by eBPF
@@ -1283,17 +1288,17 @@ func configureHostVeth(name string, podIPs []net.IP, netID uint32, podMAC net.Ha
 	// later pod, and a stale entry would widen the new leg's grant. Only when
 	// PORT_F_FWD_SCOPED is set; an unscoped/non-forwarding port consults nothing.
 	if netID&datapath.PortForwardScopedFlag != 0 {
-		if err := datapath.ClearFwdCidrs(uint32(idx)); err != nil {
+		if err := datapath.ClearFwdCidrs(index); err != nil {
 			return err
 		}
 		for _, cidr := range fwdCIDRs {
-			if err := datapath.SetFwdCidr(uint32(idx), cidr); err != nil {
+			if err := datapath.SetFwdCidr(index, cidr); err != nil {
 				return fmt.Errorf("program forwarding CIDR %q: %w", cidr, err)
 			}
 		}
 	} else {
 		// Not (or no longer) scoped: clear any leftover from a reused ifindex.
-		if err := datapath.ClearFwdCidrs(uint32(idx)); err != nil {
+		if err := datapath.ClearFwdCidrs(index); err != nil {
 			return err
 		}
 	}
@@ -1452,7 +1457,7 @@ func netFromPortName(name string) (uint32, bool) {
 		return 0, false
 	}
 	vni, err := strconv.ParseUint(name[1:dot], 10, 32)
-	if err != nil || vni == 0 {
+	if err != nil || vni < uint64(netid.FirstVNI) || vni > uint64(netid.LastVNI) {
 		return 0, false
 	}
 	return uint32(vni), true

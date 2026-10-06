@@ -10,9 +10,9 @@ container images come from and how their digest pins stay honest**.
 
 | Chart | What it is | Namespace |
 |---|---|---|
-| `chart/cozyplane` | The CNI: agent DaemonSet, controller Deployment, the `local.sdn.cozystack.io` CRDs (FabricIP), RBAC, the VPCBinding export policy | `cozy-cozyplane` |
+| `chart/cozyplane` | The CNI: agent/controller, FabricIP, RBAC and policies; CRD mode also installs eleven tenant schemas and the fail-closed webhook configuration | `cozy-cozyplane` |
 | `chart/cozyplane-kpr` | Kube-proxy replacement: socket-LB service load balancing, importing Cilium's LB control plane with no Cilium agent ([kube-proxy-replacement.md](kube-proxy-replacement.md)) | `cozy-cozyplane` |
-| `chart/cozyplane-apiserver` | The aggregated API server for `sdn.cozystack.io` (the tenant group) plus its dedicated etcd ([control-plane.md](control-plane.md), [api-groups.md](api-groups.md)) | `cozy-cozyplane` |
+| `chart/cozyplane-apiserver` | Tenant control-plane phase: aggregated server/dedicated etcd by default, or CRD admission service and TLS ([crd-distribution.md](crd-distribution.md)) | `cozy-cozyplane` |
 | `chart/cozyplane-cilium-crds` | The `cilium.io/v2` policy CRDs, **inert**. Nothing enforces them; stock Cozystack charts embed `CiliumNetworkPolicy` / `CiliumClusterwideNetworkPolicy` objects and fail to install when the CRDs are absent | `cozy-system` |
 
 None of them depends on `cozy-lib` or any other chart library, and none has a
@@ -49,6 +49,16 @@ both. Its `ref` carries `branch: main` and **no `commit`** — a repository that
 pinned a commit to itself could never be updated in place. A cluster that wants
 a fixed build stamps `commit: <sha>` onto its own copy of that object.
 
+Both PackageSources have a `default` aggregated variant and a `crd` variant.
+Select the matching pair in a **fresh regional cluster**; an existing populated
+distribution cannot be switched in place. CRD networking applies
+`values-crd.yaml` after the default and Talos overlays. Its dependency list is
+still empty: default-network/FabricIP bootstrap must work before cert-manager.
+The CRD control-plane variant applies its own `values-crd.yaml` and depends only
+on cert-manager, without the etcd-operator or storage layer. Tenant writes fail
+closed until that second phase is ready. Keep both chart releases in the same
+namespace with matching TLS settings.
+
 `valuesFiles` are ordered: the Cozystack operator applies the **first** with
 strategy `Overwrite` and **every later one** with `Merge`. That is why
 `values-talos.yaml` must stay a separate file — its contents (notably
@@ -69,8 +79,9 @@ Two images, and they are **not** built the same way.
 Built and pushed by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 on every push to `main` (and on `v*` tags), for `linux/amd64` and `linux/arm64`,
 from the repository root `Dockerfile`. It carries the agent, the CNI plugin, the
-controller, the aggregated apiserver, the gateway and the responder — one image,
-six binaries. Tags: `main`, `main-<short-sha>`, and semver on tags. The workflow
+controller, aggregated apiserver, CRD admission server, gateway, responder and
+VPN components, plus the CNI plugins — one image. Tags: `main`,
+`main-<short-sha>`, and semver on tags. The workflow
 prints the resulting digest into the run's job summary.
 
 The build is **digest-reproducible** ([#4](../../issues/4)): `SOURCE_DATE_EPOCH=0`

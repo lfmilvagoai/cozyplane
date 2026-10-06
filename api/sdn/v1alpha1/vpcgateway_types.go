@@ -157,6 +157,7 @@ type VPCGatewaySpec struct {
 	// route to a Port whose binding lacks that grant is inert, reported in a
 	// condition, and widens nothing.
 	// +optional
+	// +listType=atomic
 	Routes []VPCGatewayRoute `json:"routes,omitempty"`
 }
 
@@ -165,6 +166,7 @@ type VPCGatewayRoute struct {
 	// CIDRs are the remote prefixes this route matches (v4 or v6). They must not
 	// overlap the cluster's own networks (pod/service/node/join, link-local);
 	// the controller refuses such a route in a condition.
+	// +listType=atomic
 	CIDRs []string `json:"cidrs"`
 
 	// Via selects the workload the matched traffic is delivered to.
@@ -229,6 +231,7 @@ type VPCGatewayStatus struct {
 	// operator sees which leg a route landed on (and, when empty, that it did
 	// not resolve — the RoutesResolved condition carries why).
 	// +optional
+	// +listType=atomic
 	Routes []VPCGatewayRouteStatus `json:"routes,omitempty"`
 
 	// Phase is the lifecycle phase.
@@ -237,12 +240,14 @@ type VPCGatewayStatus struct {
 
 	// Conditions is the detailed state.
 	// +optional
+	// +listType=atomic
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // VPCGatewayRouteStatus reports one resolved route.
 type VPCGatewayRouteStatus struct {
 	// CIDRs echoes the spec route's prefixes.
+	// +listType=atomic
 	CIDRs []string `json:"cidrs"`
 	// Port is the cluster-scoped Port name the CIDRs were programmed toward,
 	// empty when the route did not resolve (no live selected Port, or the
@@ -252,6 +257,7 @@ type VPCGatewayRouteStatus struct {
 	// Ports are ECMP next-hops for this prefix. Port remains the first entry for
 	// additive compatibility with single-next-hop agents.
 	// +optional
+	// +listType=atomic
 	Ports []string `json:"ports,omitempty"`
 }
 

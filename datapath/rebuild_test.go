@@ -76,7 +76,7 @@ func TestParseVethAliasRejects(t *testing.T) {
 		}
 	}
 	// Sanity: the canonical form is accepted.
-	if _, _, _, ok := parseVethAlias(FormatVethAlias(7, []net.IP{net.ParseIP("10.0.0.1")}, mac)); !ok {
+	if _, _, _, ok := parseVethAlias(FormatVethAlias(107, []net.IP{net.ParseIP("10.0.0.1")}, mac)); !ok {
 		t.Fatal("canonical alias rejected")
 	}
 }

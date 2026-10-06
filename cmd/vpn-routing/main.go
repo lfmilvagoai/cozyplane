@@ -47,6 +47,7 @@ func main() {
 }
 
 func run(path, podIP string) error {
+	// #nosec G304 G703 -- VPN_CONFIG is an operator-set process environment path to a read-only mounted config, never tenant request data.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read routing config: %w", err)
@@ -62,9 +63,11 @@ func run(path, podIP string) error {
 	if err != nil {
 		return err
 	}
+	// #nosec G301 -- Fixed root-owned FRR directory; unprivileged FRR processes need traversal, configuration files remain 0600.
 	if err := os.MkdirAll(filepath.Dir(frrConfigPath), 0o755); err != nil {
 		return err
 	}
+	// #nosec G301 -- Fixed root-owned FRR runtime directory shared by FRR processes; no group/world write.
 	if err := os.MkdirAll(frrRunDir, 0o755); err != nil {
 		return err
 	}
@@ -89,6 +92,7 @@ func run(path, podIP string) error {
 				return err
 			}
 		}
+		// #nosec G204 -- Executable and arguments come only from the three literal FRR commands above; no shell or tenant-supplied arguments.
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Start(); err != nil {
@@ -176,7 +180,7 @@ func routerIDFor(podIP string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(podIP))
 	v := h.Sum32()
-	return fmt.Sprintf("10.%d.%d.%d", byte(v>>16), byte(v>>8), byte(v))
+	return fmt.Sprintf("10.%d.%d.%d", byte((v>>16)&0xff), byte((v>>8)&0xff), byte(v&0xff))
 }
 
 func splitIPs(values []string) (v4, v6 []string) {

@@ -102,7 +102,10 @@ func routeMapEntry(d RouteEntry) (overlayLpmKey, overlayRouteEntry, error) {
 	if len(nextHops) == 0 || len(nextHops) > 2 {
 		return overlayLpmKey{}, overlayRouteEntry{}, fmt.Errorf("route %s has %d next-hops; expected 1 or 2", d.CIDR, len(nextHops))
 	}
-	e := overlayRouteEntry{Count: uint8(len(nextHops))}
+	e := overlayRouteEntry{Count: 1}
+	if len(nextHops) == 2 {
+		e.Count = 2
+	}
 	for i, nextHop := range nextHops {
 		gw, err := addr128(nextHop.GwIP)
 		if err != nil {

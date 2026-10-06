@@ -417,7 +417,7 @@ func ensureTCX(ifindex int, prog *ebpf.Program, attach ebpf.AttachType, ingress 
 	tcxMu.Lock()
 	defer tcxMu.Unlock()
 
-	if err := os.MkdirAll(filepath.Join(PinRoot, "links"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(PinRoot, "links"), 0o750); err != nil {
 		return err
 	}
 	pin := linkPinPath(ifindex, ingress)

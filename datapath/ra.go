@@ -49,6 +49,10 @@ const raInterval = 200 * time.Second
 // ctx ends. mtu is the pod MTU to advertise; rdnss (optional) is the v6
 // resolver address to hand out.
 func RunRAResponder(ctx context.Context, mtu int, rdnss net.IP, log *slog.Logger) {
+	if mtu < 1280 || mtu > 65535 {
+		log.Error("RA responder: invalid IPv6 MTU", "mtu", mtu)
+		return
+	}
 	serving := map[int]context.CancelFunc{}
 
 	updates := make(chan netlink.LinkUpdate, 64)
@@ -137,7 +141,7 @@ func serveRA(ctx context.Context, veth string, ifindex int, mac net.HardwareAddr
 	}
 	// Kernel-side filter: only Router Solicitations reach userspace
 	// (ethertype v6 is already bound; check next-header and ICMPv6 type).
-	filter := []unix.SockFilter{
+	filter := [...]unix.SockFilter{
 		{Code: 0x30, K: 20},         // ldb ip6 next-header
 		{Code: 0x15, Jf: 3, K: 58},  // jne ICMPv6 -> drop
 		{Code: 0x30, K: 54},         // ldb icmp6 type
@@ -200,6 +204,9 @@ func serveRA(ctx context.Context, veth string, ifindex int, mac net.HardwareAddr
 // pod's exact address, an MTU option, the source link-layer option, and —
 // when rdnss is set — an RDNSS option.
 func raFrame(mac net.HardwareAddr, podIP net.IP, mtu int, rdnss net.IP) []byte {
+	if mtu < 1280 || mtu > 65535 {
+		return nil
+	}
 	icmpLen := 16 + 32 + 8 + 8 // RA header + PIO + MTU + SLLA
 	if rdnss != nil {
 		icmpLen += 24

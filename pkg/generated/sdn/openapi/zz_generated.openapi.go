@@ -415,6 +415,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallEgressRule(ref common.Referen
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"to": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "To lists admitted destination ranges. Empty means any destination.",
 							Type:        []string{"array"},
@@ -429,6 +434,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallEgressRule(ref common.Referen
 						},
 					},
 					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ports narrows the rule to specific destination ports. Empty means every port, TCP and UDP.",
 							Type:        []string{"array"},
@@ -515,6 +525,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallPeer(ref common.ReferenceCall
 						},
 					},
 					"except": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Except carves sub-ranges out of CIDR.",
 							Type:        []string{"array"},
@@ -580,6 +595,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallRule(ref common.ReferenceCall
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"from": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "From lists admitted source ranges. Empty means any source.",
 							Type:        []string{"array"},
@@ -594,6 +614,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallRule(ref common.ReferenceCall
 						},
 					},
 					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ports narrows the rule to specific destination ports. Empty means every port, TCP and UDP.",
 							Type:        []string{"array"},
@@ -630,6 +655,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallSpec(ref common.ReferenceCall
 						},
 					},
 					"policyTypes": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "PolicyTypes selects the directions this object isolates, mirroring NetworkPolicy: empty defaults to [Ingress], plus Egress when Egress rules are present. A node selected by an object whose types include Egress is host-EGRESS isolated: its own new TCP/UDP flows out are default-deny. node->node and node->local-pod stay exempt regardless (kubelet↔apiserver, the agent's own API access, kubelet probes — docs/host-firewall.md).",
 							Type:        []string{"array"},
@@ -645,6 +675,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallSpec(ref common.ReferenceCall
 						},
 					},
 					"ingress": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ingress rules union across all HostFirewalls selecting a node.",
 							Type:        []string{"array"},
@@ -659,6 +694,11 @@ func schema_cozyplane_api_sdn_v1alpha1_HostFirewallSpec(ref common.ReferenceCall
 						},
 					},
 					"egress": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Egress rules union across all HostFirewalls selecting a node. `to` peers are CIDRs, like ingress `from`.",
 							Type:        []string{"array"},
@@ -959,7 +999,7 @@ func schema_cozyplane_api_sdn_v1alpha1_PortStatus(ref common.ReferenceCallback) 
 							},
 						},
 						SchemaProps: spec.SchemaProps{
-							Description: "Groups is the set of SecurityGroup numeric ids (1..63, within the Port's VPC) this Port is a member of, resolved by the controller from the pod's labels. The agent folds it into the datapath membership bitmap. Empty means \"no groups\" — legacy allow-all intra-VPC ingress.",
+							Description: "Groups is the set of SecurityGroup numeric ids (1..62, within the Port's VPC) this Port is a member of, resolved by the controller from the pod's labels. The agent folds it into the datapath membership bitmap. Empty means \"no groups\" — legacy allow-all intra-VPC ingress. [0] alone means a selected SG is pending/invalid: deny new SG-gated TCP/UDP admissions until all selected group IDs are resolved. It is not full protocol quarantine. All agents must support this before activation.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1497,6 +1537,11 @@ func schema_cozyplane_api_sdn_v1alpha1_ServiceVIPSpec(ref common.ReferenceCallba
 						},
 					},
 					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ports are the service ports the VIP serves.",
 							Type:        []string{"array"},
@@ -1534,6 +1579,11 @@ func schema_cozyplane_api_sdn_v1alpha1_ServiceVIPStatus(ref common.ReferenceCall
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"backends": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Backends are the ready endpoints resolved to same-VPC Port addresses; the agents program the datapath from this list.",
 							Type:        []string{"array"},
@@ -1600,6 +1650,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VIPBackend(ref common.ReferenceCallback) 
 						},
 					},
 					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ports are the resolved per-port targets on this backend.",
 							Type:        []string{"array"},
@@ -1856,6 +1911,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCBindingSpec(ref common.ReferenceCallba
 						},
 					},
 					"forwardingCIDRs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "ForwardingCIDRs narrows AllowForwarding to declared remote prefixes (issue #6). Empty (the default) keeps the blanket grant above — any foreign source. Non-empty scopes it: the datapath admits a foreign source ONLY when it falls within one of these CIDRs, and anti-spoofing stays on for everything else. This is the difference between \"this VM is a VPN endpoint for 10.50.0.0/16\" and \"this VM may impersonate anything\" — and it is exactly what kube-ovn cannot express (its allowed-address-pair takes host IPs only). Ignored unless AllowForwarding is set.",
 							Type:        []string{"array"},
@@ -2241,6 +2301,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewayRoute(ref common.ReferenceCallb
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"cidrs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "CIDRs are the remote prefixes this route matches (v4 or v6). They must not overlap the cluster's own networks (pod/service/node/join, link-local); the controller refuses such a route in a condition.",
 							Type:        []string{"array"},
@@ -2279,6 +2344,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewayRouteStatus(ref common.Referenc
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"cidrs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "CIDRs echoes the spec route's prefixes.",
 							Type:        []string{"array"},
@@ -2301,6 +2371,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewayRouteStatus(ref common.Referenc
 						},
 					},
 					"ports": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Ports are ECMP next-hops for this prefix. Port remains the first entry for additive compatibility with single-next-hop agents.",
 							Type:        []string{"array"},
@@ -2364,6 +2439,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewaySpec(ref common.ReferenceCallba
 						},
 					},
 					"routes": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Routes is the VPC's route table for off-VPC destinations (issue #6). Until now a VPC had exactly two off-net dispositions: the default gateway (NAT egress / internet) or drop. A route adds a third — \"these remote prefixes go through THIS workload\" — and once there are three there is a table, of which the NAT gateway is retroactively just the default entry.\n\nEach route names remote CIDRs and the workload (an appliance leg in this VPC — a VPN endpoint, a router) they resolve through, by identity. The datapath consults it BEFORE the NAT decision, so a routed prefix reaches the appliance instead of being masqueraded toward the internet; a miss falls through to NAT/drop exactly as today. The workload may reschedule or change IP and the route re-resolves — a route never names an address.\n\nA route only delivers; the right of the target to forward a foreign (remote-site) source is the separate VPCBinding.allowForwarding grant. A route to a Port whose binding lacks that grant is inert, reported in a condition, and widens nothing.",
 							Type:        []string{"array"},
@@ -2414,6 +2494,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewayStatus(ref common.ReferenceCall
 						},
 					},
 					"routes": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Routes reports how each spec.routes entry resolved: the CIDRs it matched and the cluster-scoped Port name they were programmed toward, so an operator sees which leg a route landed on (and, when empty, that it did not resolve — the RoutesResolved condition carries why).",
 							Type:        []string{"array"},
@@ -2435,6 +2520,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCGatewayStatus(ref common.ReferenceCall
 						},
 					},
 					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "Conditions is the detailed state.",
 							Type:        []string{"array"},
@@ -2721,7 +2811,7 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCRef(ref common.ReferenceCallback) comm
 				Properties: map[string]spec.Schema{
 					"namespace": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Namespace is the namespace that owns the VPC.",
+							Description: "Namespace is the namespace that owns the VPC. Omitted namespace resolves locally for namespaced binding consumers.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -2736,7 +2826,7 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCRef(ref common.ReferenceCallback) comm
 						},
 					},
 				},
-				Required: []string{"namespace", "name"},
+				Required: []string{"name"},
 			},
 		},
 	}
@@ -2750,6 +2840,11 @@ func schema_cozyplane_api_sdn_v1alpha1_VPCSpec(ref common.ReferenceCallback) com
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"cidrs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
 						SchemaProps: spec.SchemaProps{
 							Description: "CIDRs are the address ranges (IPv4 and/or IPv6) of the VPC. These may overlap with other VPCs; isolation is by overlay, not address space.",
 							Type:        []string{"array"},

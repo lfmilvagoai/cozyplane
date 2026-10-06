@@ -24,8 +24,18 @@ func ensureProcSys(name, want string) error {
 }
 
 func ensureFileValue(path, want string) error {
+	// #nosec G304 -- Production callers supply only the two fixed forwarding sysctl paths above; other paths are test fixtures.
 	if current, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(current)) == want {
 		return nil
 	}
-	return os.WriteFile(path, []byte(want), 0o644)
+	// #nosec G304 -- Existing fixed forwarding sysctl only, with no create flag; path cannot come from tenant data.
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(want); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

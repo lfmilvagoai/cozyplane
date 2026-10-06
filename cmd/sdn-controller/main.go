@@ -72,6 +72,7 @@ func main() {
 		secureMetrics        bool
 		enableHTTP2          bool
 		gatewayImage         string
+		agentImage           string
 		gatewayNamespace     string
 		internalCIDRs        string
 		clusterDNS           string
@@ -92,6 +93,7 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics server")
+	flag.StringVar(&agentImage, "agent-image", "", "agent image that must finish rollout before pending SG encoding is emitted")
 	flag.StringVar(&gatewayImage, "gateway-image", "",
 		"cozyplane image for VPC egress gateway pods; empty disables gateway reconciliation")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", os.Getenv("POD_NAMESPACE"),
@@ -193,6 +195,7 @@ func main() {
 	}
 	gateCfg := sdnControllerConfig{
 		gatewayImage:      gatewayImage,
+		agentImage:        agentImage,
 		gatewayNamespace:  gatewayNamespace,
 		internalCIDRs:     internalCIDRs,
 		clusterDNS:        clusterDNS,
@@ -234,6 +237,7 @@ func main() {
 // so the registration below can run long after the flags were parsed.
 type sdnControllerConfig struct {
 	gatewayImage      string
+	agentImage        string
 	gatewayNamespace  string
 	internalCIDRs     string
 	clusterDNS        string
@@ -319,7 +323,8 @@ func setupSDNControllers(mgr manager.Manager, cfg sdnControllerConfig) error {
 	}
 
 	if err := (&sdncontroller.PortMembershipReconciler{
-		Client: mgr.GetClient(),
+		Client:        mgr.GetClient(),
+		SentinelReady: sdncontroller.AgentRolloutGate(mgr.GetAPIReader(), cfg.gatewayNamespace, cfg.agentImage),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller %s: %w", "PortMembership", err)
 	}

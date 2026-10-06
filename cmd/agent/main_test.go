@@ -137,7 +137,7 @@ func TestVNIFromPortName(t *testing.T) {
 		ok   bool
 	}{
 		{"v101.10-70-0-1", 101, true},
-		{"v1.10-244-0-5", 1, true},
+		{"v1.10-244-0-5", 0, false},
 		{"bogus", 0, false},
 		{"v.10-70-0-1", 0, false},
 		{"vx.10-70-0-1", 0, false},

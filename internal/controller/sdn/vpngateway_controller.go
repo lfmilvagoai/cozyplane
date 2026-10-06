@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"k8s.io/utils/ptr"
 	"net"
 	"net/http"
 	"slices"
@@ -935,6 +936,7 @@ func (r *VPNGatewayReconciler) buildWGConfig(ctx context.Context, gw *sdnv1alpha
 	if len(peerInstances) > 1 {
 		cfg.PeerInstances = peerInstances
 	}
+	// #nosec G117 -- Appliance credentials are deliberately serialized into a Kubernetes Secret, mounted read-only with mode 0600; never an API response or log.
 	return json.Marshal(cfg)
 }
 
@@ -1720,7 +1722,7 @@ func (r *VPNGatewayReconciler) deployment(gw *sdnv1alpha1.VPNGateway, backend, c
 					Volumes: []corev1.Volume{{
 						Name: "config",
 						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-wg-config"},
+							Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-wg-config", DefaultMode: ptr.To[int32](0o600)},
 						},
 					}, {Name: "frr-run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 				},

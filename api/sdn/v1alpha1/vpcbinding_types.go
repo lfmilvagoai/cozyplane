@@ -54,6 +54,7 @@ type VPCBindingSpec struct {
 	// is exactly what kube-ovn cannot express (its allowed-address-pair takes
 	// host IPs only). Ignored unless AllowForwarding is set.
 	// +optional
+	// +listType=atomic
 	ForwardingCIDRs []string `json:"forwardingCIDRs,omitempty"`
 }
 

@@ -19,6 +19,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-agent ./cmd/agent && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane ./cmd/cni && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/sdn-controller ./cmd/sdn-controller && \
+    CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-admission ./cmd/admission && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-apiserver ./cmd/apiserver && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-gateway ./cmd/gateway && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-vpn-gateway ./cmd/vpn-gateway && \
@@ -50,6 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends perl-base=5.36.
            /var/log/alternatives.log /var/cache/ldconfig/aux-cache
 COPY --from=build /out/cozyplane-agent /usr/local/bin/cozyplane-agent
 COPY --from=build /out/sdn-controller /usr/local/bin/sdn-controller
+COPY --from=build /out/cozyplane-admission /usr/local/bin/cozyplane-admission
 COPY --from=build /out/cozyplane-apiserver /usr/local/bin/cozyplane-apiserver
 COPY --from=build /out/cozyplane-gateway /usr/local/bin/cozyplane-gateway
 COPY --from=build /out/cozyplane-vpn-gateway /usr/local/bin/cozyplane-vpn-gateway

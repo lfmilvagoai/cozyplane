@@ -341,7 +341,7 @@ func hostVethNameForDelegate(containerID, ifName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if n > maxDelegates {
+	if n < 0 || n > maxDelegates || n > 25 {
 		return "", fmt.Errorf("delegated interface %q exceeds the %d supported per pod (host interface names)",
 			ifName, maxDelegates)
 	}
@@ -349,7 +349,7 @@ func hostVethNameForDelegate(containerID, ifName string) (string, error) {
 	if len(id) > 10 {
 		id = id[:10]
 	}
-	return hostVethPrefix + string(rune('a'+n)) + id, nil
+	return hostVethPrefix + string('a'+rune(n)) + id, nil
 }
 
 func hostVethNameForIndex(containerID string, index int) string {

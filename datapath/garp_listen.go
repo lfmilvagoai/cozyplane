@@ -96,6 +96,9 @@ func WatchGuestAnnounce(ctx context.Context, ifindex int, expectMAC net.Hardware
 }
 
 func watchGuestAnnounceSocket(ctx context.Context, fd, ifindex int, expectMAC net.HardwareAddr, vmIP net.IP, v4 bool) error {
+	if fd < 0 || fd > 2147483647 {
+		return fmt.Errorf("invalid announcement descriptor")
+	}
 	buf := make([]byte, 1500)
 	poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	for {

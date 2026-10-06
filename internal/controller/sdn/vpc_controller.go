@@ -19,6 +19,7 @@ package sdn
 import (
 	"context"
 	"fmt"
+	"github.com/lllamnyp/cozyplane/pkg/netid"
 	"slices"
 	"time"
 
@@ -41,7 +42,7 @@ import (
 
 // firstVNI is the lowest network id handed out to VPCs. Ids below it are
 // reserved (0 is the default/system network).
-const firstVNI int32 = 100
+const firstVNI int32 = netid.FirstVNI
 
 // VPCReconciler assigns each VPC a unique network id (VNI) and marks it Ready.
 // The datapath (agent) keys isolation and the overlay on this id.
@@ -91,7 +92,7 @@ func (r *VPCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 	previousStatus := vpc.DeepCopy().Status
 
-	if vpc.Status.VNI == 0 {
+	if !netid.ValidVNI(vpc.Status.VNI) {
 		vni, err := r.allocateVNI(ctx)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -227,11 +228,12 @@ func (r *VPCReconciler) allocateVNI(ctx context.Context) (int32, error) {
 			used[v] = true
 		}
 	}
-	for vni := firstVNI; ; vni++ {
+	for vni := firstVNI; vni <= netid.LastVNI; vni++ {
 		if !used[vni] {
 			return vni, nil
 		}
 	}
+	return 0, fmt.Errorf("tenant VNI space exhausted")
 }
 
 // lostVNIToDuplicate reports whether vpc shares its VNI with another VPC that
