@@ -103,17 +103,23 @@ VPCGateway controller identities is a prerequisite to reducing those privileges.
 Code generation, all root Go tests, vet, the separate KPR tests and Linux arm64
 build pass. The required isolated kernel lane loads the real BPF programs and
 checks boundary packets; its continuation stubs do not prove NAT, FloatingIP,
-Geneve or KubeVirt routing on a cluster. Those target tests remain required before
-regional activation and are not represented as mock successes.
+Geneve or KubeVirt routing on a cluster. The disposable three-node Talos CRD
+recipe now covers real IPv4/IPv6 intra-VPC traffic, UDP/TCP DNS, ServiceVIP,
+IPv4 Internet and FloatingIP closure, peering revocation and KubeVirt migration.
+Automatic DHCPv6 assigns the declared guest address; final migration received
+60/60 replies in each family. Native IPv6 DNS/Internet remain unverified on
+the lab's IPv4 DNS/underlay. Required CI and regional activation remain gates.
 
 The Go vulnerability scan after updating OpenTelemetry to 1.45.0 reports no
 called vulnerability; three imported-package and three required-module findings
 without calls remain reported. The local production image has no fixed
 HIGH/CRITICAL finding under the integration portal's existing Trivy ignore list.
 
-The full gosec 2.29.0 scan reports 256 findings: 244 pre-existing findings and
-twelve generated conversion-gen unsafe casts. The ten numeric findings added by
-this extension were fixed with checked VNI/mask ranges and typed ProgramArray
-values. The twelve generated casts have matching recursive field layouts and
-round-trip conversion checks. This is a reviewed feature delta, not a globally
-clean static scan or a security certification of the inherited VPN code.
+The final global gosec 2.29.0 scan with Go 1.26.8 reports zero findings across
+307 files and 60,608 lines. Generated conversion casts retain matching recursive
+field layouts and round-trip checks. Fifteen top-level real Talos kernel tests
+pass after regenerating the DNS and RS/DHCPv6 boundary fixes, without skips.
+This is evidence for the tested source, not a certification of every optional
+VPN/FRR profile or indefinite memory stability. The distroless control-plane
+scan has zero HIGH/CRITICAL findings; the Debian networking image still has
+unfixed HIGH findings, explicitly retained in its full scan.

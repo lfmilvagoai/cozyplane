@@ -17,19 +17,23 @@ they're discovered rather than leaving them only in issues.
 
 ### CRD distribution and security follow-up — 2026-10-06
 
-- [ ] Review and publish the optional distroless control-plane target and chart
-  image selection; retain the Debian networking runtime for its external tools.
+- [ ] Merge the optional distroless control-plane target and chart image
+  selection. Private amd64/arm64 builds and scans passed; the controller and
+  admission ran on the Talos lab. Retain Debian for networking's external tools.
 - [ ] Review and publish the full `api.mode: crd` distribution, eleven generated
   tenant schemas, shared admission strategies, TLS rotation and matching
-  two-phase PackageSource variants. Dedicated actual kube-apiserver checks pass;
-  this is not yet merged or certified on a regional Talos/KubeVirt cluster.
-- [ ] Complete the fresh CRD regional CNI/IPv4/IPv6/DNS/ServiceVIP/FloatingIP,
-  allocation/repair, webhook outage and VM primary migration/rollback recipe.
-- [ ] Release and pin the image containing admission and the bounded DNS,
-  identifier/port validation and retry-safe VPC map reconciliation fixes.
-  Unit/race checks and the global gosec scan have passed; recheck the final image
-  and retain exact scope of each proof. Short memory windows do not certify
-  absence of a heap leak.
+  two-phase PackageSource variants. Seventeen actual API cases passed on the
+  three-node Talos lab, including webhook outage/recovery and normal cleanup.
+  Review/merge and the required CRD CI lane remain open.
+- [ ] Complete regional certification beyond the acquired lab proofs: IPv4/IPv6
+  intra-VPC, split-horizon DNS, ServiceVIP, IPv4 Internet and FloatingIP closure,
+  directed peering revocation, automatic DHCPv6, VM migration and restart.
+  The lab's IPv4 DNS/underlay cannot certify native IPv6 DNS or Internet.
+- [ ] Adopt the published, scanned image pins in the release CI. Private lab
+  control-plane source `88423a3` and networking source `8146dce` were pulled
+  and exercised; the standard lab CI does not yet build the separate distroless
+  target. Unit/race checks and the global gosec scan passed. Short idle/load
+  memory windows do not certify absence of a long-running heap leak.
 
 The sections below are the full ledger, and most of it is ticked. This is the
 short list: what is actually left, in rough priority order. Revised **2026-07-14**,
@@ -373,15 +377,26 @@ install installs nothing — [#10](../../issues/10)'s endgame.
   being dropped before split-horizon steering. Align the boundary exception
   with that steering predicate. Regression tests reproduce the old drop in both
   families; real Talos kernel packet tests now verify TCP/UDP rewriting and
-  denial of other management/peer/external traffic. Publish the rebuilt networking
-  image and repeat the target recipe before marking the regional gate complete.
+  denial of other management/peer/external traffic. The rebuilt networking image
+  was published, pulled and exercised on all three Talos nodes: UDP/TCP DNS and
+  IPv4/IPv6 ServiceVIP pass. Merge remains pending.
+
+- [ ] Guest IPv6 configuration through the managed boundary: narrowly allow
+  local RS and DHCPv6 before a guest has its assigned VPC source. Old-object
+  packet tests reproduce the drop; the regenerated object passes malformed
+  packet and data-traffic denials on Talos. Actual DHCPv6 assigns the pinned
+  address and IPv4/IPv6 migration passes with 60/60 replies per family.
+  Source `8146dce` is published and running on the lab; merge remains pending.
 
 - [ ] Registry pull eligibility for the CRD lab image: the Debian 13 runtime
   updates remove the observed CRITICAL findings, but unfixed HIGH findings
   still need review against the destination registry's policy. A green scan
-  limited to fixable HIGH/CRITICAL findings is insufficient. Keep the lab
-  transition and production activation pending until the actual pull and
-  real-cluster recipe pass; see [packaging.md](packaging.md).
+  limited to fixable HIGH/CRITICAL findings is insufficient. The actual private
+  registry accepted the final image under its operator-selected Critical policy,
+  with no added CVE exception, and the three lab nodes pulled it. The full amd64
+  scan reports 0 CRITICAL and 50 HIGH occurrences (13 distinct unfixed CVEs).
+  Distribution review and production activation remain pending; see
+  [packaging.md](packaging.md).
 - [ ] Hardened active-active VPN routing: packaged FRR's privilege setup asks
   for `SYS_ADMIN`, which the hardened appliance profile deliberately excludes.
   Reproduced with both the previous Debian 12 image and Debian 13; do not add
