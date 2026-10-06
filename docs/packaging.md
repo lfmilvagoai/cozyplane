@@ -72,7 +72,39 @@ otherwise the PackageSource waits forever on a package that never appears.
 
 ## 3. Where the images are built
 
-Two images, and they are **not** built the same way.
+The default networking image and the separate KPR image are built in CI.
+An optional distroless target supplies the static control-plane services.
+
+### Distroless control plane
+
+Build the root Dockerfile with `--target control-plane` to package only
+`sdn-controller`, `cozyplane-apiserver` and `cozyplane-admission` on the
+digest-pinned `gcr.io/distroless/static-debian13:nonroot` base. These Go binaries
+are statically linked; the runtime has no shell or package manager and runs as
+UID/GID 65532. The controller and API server charts also use a read-only root
+filesystem and drop all capabilities, as the CRD admission deployment already
+does. Mounted service-account and TLS files remain readable by that user.
+
+```sh
+docker build --target control-plane -t cozyplane-control-plane:dev .
+helm template cozyplane chart/cozyplane \
+  --set controller.image=cozyplane-control-plane:dev
+helm template cozyplane-apiserver chart/cozyplane-apiserver \
+  --set image=cozyplane-control-plane:dev
+```
+
+For a cluster, pin both image references by digest after scanning every
+advertised architecture. Set `controller.image` in the networking release and
+`image` in the API/admission release. An empty `controller.image` preserves the
+existing single-image deployment. The controller's `--agent-image` and
+`--gateway-image` still use the networking release's top-level `image`, so
+generated VPN and gateway workloads retain their required executables.
+
+The default `runtime` target remains the networking image: agents and gateways
+execute iptables, StrongSwan or FRR, and the CNI installer uses a shell and `cp`.
+Copying their dynamic libraries into a distroless image without distribution
+package metadata would obscure vulnerability scans. Those components therefore
+retain the Debian runtime and its full package inventory.
 
 ### `ghcr.io/lllamnyp/cozyplane` — CI-built, multi-arch, reproducible
 

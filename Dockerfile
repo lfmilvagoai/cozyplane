@@ -27,6 +27,16 @@ RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /ou
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-vpn-routing ./cmd/vpn-routing && \
     CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -trimpath -buildvcs=false -o /out/cozyplane-responder ./cmd/responder
 
+# Static control-plane services need no networking executables or shell.
+# Keep this optional target before runtime so the default image stays compatible
+# with the agent, CNI installer and managed VPN/gateway workloads.
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS control-plane
+COPY --from=build /out/sdn-controller /usr/local/bin/sdn-controller
+COPY --from=build /out/cozyplane-apiserver /usr/local/bin/cozyplane-apiserver
+COPY --from=build /out/cozyplane-admission /usr/local/bin/cozyplane-admission
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/sdn-controller"]
+
 # Build the upstream plugins at the same pinned, patched Go version. Released
 # archives can retain a vulnerable stdlib even when our own binaries are rebuilt.
 FROM build AS cni

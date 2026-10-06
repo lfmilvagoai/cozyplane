@@ -112,6 +112,9 @@ agent:
       memory: 512Mi
 
 controller:
+  # Optional distroless control-plane image; empty uses the networking image.
+  # Agent and managed gateway image arguments always retain top-level image.
+  image: ""
   replicas: 1
   priorityClassName: system-cluster-critical
   resources:

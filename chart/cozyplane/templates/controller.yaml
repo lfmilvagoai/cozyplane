@@ -228,8 +228,16 @@ spec:
       {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: controller
-          image: {{ .Values.image }}
+          image: {{ default .Values.image .Values.controller.image }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           command: ["/usr/local/bin/sdn-controller"]
           args:
             - --agent-image={{ .Values.image }}

@@ -17,6 +17,8 @@ they're discovered rather than leaving them only in issues.
 
 ### CRD distribution and security follow-up — 2026-10-06
 
+- [ ] Review and publish the optional distroless control-plane target and chart
+  image selection; retain the Debian networking runtime for its external tools.
 - [ ] Review and publish the full `api.mode: crd` distribution, eleven generated
   tenant schemas, shared admission strategies, TLS rotation and matching
   two-phase PackageSource variants. Dedicated actual kube-apiserver checks pass;
