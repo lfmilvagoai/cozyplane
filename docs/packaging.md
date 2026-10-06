@@ -76,6 +76,30 @@ Two images, and they are **not** built the same way.
 
 ### `ghcr.io/lllamnyp/cozyplane` — CI-built, multi-arch, reproducible
 
+The runtime uses digest-pinned Debian 13 and applies security updates before
+installing its networking tools. The Go binaries remain statically linked and
+use the existing pinned builder. Debian 12's available FRR and strongSwan
+packages retain HIGH/CRITICAL findings even after an ordinary rebuild; a scan
+that ignores findings without a distribution fix does not establish that a
+registry with an all-findings pull policy will accept the image.
+
+Install `strongswan-charon` explicitly: the IPsec wrapper executes
+`/usr/lib/ipsec/charon` and manages its child lifetime and VICI socket. The
+Debian 13 default `charon-systemd` package does not provide this executable;
+there is no systemd process in the gateway container.
+
+Scan each advertised architecture, including findings without a fix, and
+verify the actual registry pull before changing a cluster. An updated Debian 13
+runtime removes the two previously observed CRITICAL findings and includes the
+strongSwan authentication-bypass fix. Unfixed HIGH findings remain in other
+distribution packages; production activation and the real-cluster recipe remain
+pending. Do not lower a registry threshold or inherit another image's CVE
+exceptions to make this image downloadable.
+
+Relevant distribution reports:
+[FRR](https://security-tracker.debian.org/tracker/source-package/frr),
+[strongSwan](https://security-tracker.debian.org/tracker/CVE-2026-78135).
+
 Built and pushed by [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 on every push to `main` (and on `v*` tags), for `linux/amd64` and `linux/arm64`,
 from the repository root `Dockerfile`. It carries the agent, the CNI plugin, the

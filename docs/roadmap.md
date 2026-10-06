@@ -366,6 +366,19 @@ install installs nothing — [#10](../../issues/10)'s endgame.
 
 ## Open issues index
 
+- [ ] Registry pull eligibility for the CRD lab image: the Debian 13 runtime
+  updates remove the observed CRITICAL findings, but unfixed HIGH findings
+  still need review against the destination registry's policy. A green scan
+  limited to fixable HIGH/CRITICAL findings is insufficient. Keep the lab
+  transition and production activation pending until the actual pull and
+  real-cluster recipe pass; see [packaging.md](packaging.md).
+- [ ] Hardened active-active VPN routing: packaged FRR's privilege setup asks
+  for `SYS_ADMIN`, which the hardened appliance profile deliberately excludes.
+  Reproduced with both the previous Debian 12 image and Debian 13; do not add
+  that capability to certify the profile. Adapt FRR startup within the existing
+  capability boundary and verify the actual routing wrapper before certifying
+  this optional profile.
+
 - [x] Migration listener resource regression (B195): idle receive spin replaced
   with bounded readiness polling; completed child contexts released; cancellation
   and replacement ownership tested. Boundary notifications coalesced with bounded

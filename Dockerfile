@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build -mod=mod -trimpath -buildvcs=fal
 
 # Runtime exception to distroless: StrongSwan, FRR and iptables need their
 # distribution-managed dynamic libraries and package metadata for CVE scanning.
-FROM debian:12-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime
+FROM debian:13-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
 # iptables (nft backend) for the conditional FORWARD ACCEPT rule and the legacy
 # --masquerade=iptables mode; the init container shells out to `cp` to install
 # plugins. strongswan + strongswan-swanctl provide charon and its VICI plugin —
@@ -46,7 +46,8 @@ FROM debian:12-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90
 # it over VICI. The extra plugins provide EAP roadwarrior authentication; FRR is
 # the routing sidecar used by active-active gateways. Timestamped apt byproducts
 # are removed in the same layer so the layer content is reproducible (#4).
-RUN apt-get update && apt-get install -y --no-install-recommends perl-base=5.36.0-7+deb12u4 libpcre2-8-0=10.42-1+deb12u2 iptables strongswan strongswan-swanctl libcharon-extra-plugins libcharon-extauth-plugins frr && \
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends iptables strongswan-charon=6.0.1-6+deb13u7 strongswan=6.0.1-6+deb13u7 strongswan-swanctl=6.0.1-6+deb13u7 libcharon-extra-plugins=6.0.1-6+deb13u7 libcharon-extauth-plugins=6.0.1-6+deb13u7 frr=10.3-3+deb13u1 && \
     rm -rf /var/lib/apt/lists/* /var/log/dpkg.log /var/log/apt \
            /var/log/alternatives.log /var/cache/ldconfig/aux-cache
 COPY --from=build /out/cozyplane-agent /usr/local/bin/cozyplane-agent
