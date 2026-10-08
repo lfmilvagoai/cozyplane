@@ -112,6 +112,9 @@ workflow files are kept unchanged. `docs/ci-verifier-hardening.patch` contains
 the proposed CI change for maintainer review: make compilation/verifier loading
 blocking and verify all entry programs in a private CI pin directory. The full
 local integration includes it; the actual kernel checks above were run locally.
+The patch also retains the feature stack's hosted VPN backend matrix and manual/
+scheduled laboratory job. These e2e workflow changes are supplied for review;
+their cluster acceptance jobs have not been run on this combined tree.
 This draft's GitHub CI alone therefore does not enforce the proposed verifier gate.
 The supplied patch uses zero context; apply it with
 `git apply --unidiff-zero docs/ci-verifier-hardening.patch` after review.
