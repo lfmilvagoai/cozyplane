@@ -551,3 +551,47 @@ unconditional, which defeats the constant-folding that kept it cheap and
 produces a hotspot that does not exist. And `llvm-objdump` prints BPF jump
 offsets in decimal, so a `readelf` symbol size (hex, for a large program) and a
 disassembly offset are not the same units.
+
+## 13. kpr's Service reconciler dialed a VIP it is itself responsible for (FIXED)
+
+A stand was parked and woken by the TTL automation. Every `cozyplane-kpr` pod
+came up, attached its socket-LB programs, and ~30 s later logged:
+
+```
+svc_vips reconciler exited err="get own node node0: Get \"https://10.96.0.1:443/api/v1/nodes/node0\":
+  dial tcp 10.96.0.1:443: i/o timeout"
+```
+
+The pod then stayed **Running and Ready for 25 hours with nothing reconciling**.
+No Service change reached the datapath in that window: the root ingress Service's
+node-owned externalIPs were refused on every node, including the two with a Ready
+ingress pod, and pods created after the wake were never added as backends. A
+`rollout restart` fixed it instantly, which is the signature of a dead worker
+rather than a bad input.
+
+Two defects, one symptom.
+
+**The address.** `10.96.0.1` is `kubernetes.default`'s ClusterIP — a VIP that,
+with kube-proxy gone, *kpr itself programs*. The reconciler called
+`rest.InClusterConfig()` unconditionally, so it dialed the one address it is
+responsible for serving, during the seconds before it had served it. The chart
+already has `apiServerURL` for exactly this, and `values-talos.yaml` already
+points it at KubePrism (`https://localhost:7445`) — but that value reached only
+Cilium's hive, via `--k8s-api-server-urls`. cozyplane's own net-0 reconciler never
+read the flag. It does now, parsed the way Cilium parses it (a bare `host:port`
+means https), keeping the in-cluster CA and token.
+
+**The exit.** The reconciler ran as `go func() { if err := run(); err != nil
+{ log } }()`. One transient error ended it for the lifetime of the process, and
+nothing downgraded the pod: no probe, no restart, no non-zero exit. It now runs
+under `runWithRestart` — capped exponential backoff, reset once a run has been up
+a while, stopping only when the context is done. Every stage it owns was already
+idempotent (the pin waits retry in a loop; `seed()` is a full pass that sweeps
+leftovers), so re-running it *is* the recovery path.
+
+**What to take from this.** A goroutine whose death is invisible is worse than a
+crash. A crash gets a restart and a `RESTARTS` column; this got a single ERROR
+line in a log nobody reads while the pod advertised itself as healthy. Either
+supervise a long-runner or let its failure reach the kubelet — logging it and
+returning is the one option that cannot recover. Same class as the apiserver
+registration that ran only at startup (§ "the APIService was registered once").
