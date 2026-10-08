@@ -595,3 +595,49 @@ line in a log nobody reads while the pod advertised itself as healthy. Either
 supervise a long-runner or let its failure reach the kubelet — logging it and
 returning is the one option that cannot recover. Same class as the apiserver
 registration that ran only at startup (§ "the APIService was registered once").
+## 14. Eight pods lost their FabricIP and went unreachable from other nodes (FIXED)
+
+Reported from the integration stand. After a build roll, eight long-lived pods —
+seven of them on one node, all started right after a node reboot two weeks
+earlier — had **no `FabricIP` object**, while 196 of the other 199 pod-network
+pods did.
+
+`remotes` is keyed per address and fed from those objects, so those eight were
+reachable **only from their own node**. From anywhere else their pod IPs and the
+ClusterIPs in front of them timed out, while pods created later on the same node
+were reachable from everywhere. The visible failure was two layers up: the
+admission webhooks behind them (`vcoreprovider.kb.io`,
+`vmpodscrapes.operator.victoriametrics.com`) timed out, and the Helm upgrades of
+capi-providers, linstor and everything downstream failed. Deleting the eight pods
+fixed it, because a new sandbox means a new ADD and a new claim.
+
+Note the shape of this: **no symptom on the affected node.** The pod is Running
+and Ready, its probes pass (kubelet is node-local), its own node's traffic works.
+Nothing in cozyplane reported it, and nothing re-created the claim, because CNI
+ADD is the only thing that ever wrote one and ADD had finished weeks before.
+
+**The fix is to stop treating the claim as a side effect of ADD.** The agent now
+runs a heal pass on startup and every minute: list this node's pods (one
+field-selected List, no second informer — see §8 on the agent's memory), and for
+every address a pod already holds with no claim object, re-create the claim CNI
+ADD would have written. It cannot race the allocator, because a pod has no
+`status.podIP` until the claim that chose that address succeeded; and a claim held
+by a *different* pod's UID is reported, never overwritten, since the agent cannot
+tell which of the two is the honest holder and deleting either would strand a
+running pod. `cozyplane_fabric_ips_missing` is the gauge to alert on — non-zero
+means exactly this outage, minutes in rather than via webhook timeouts.
+
+**And a plausible way they went missing in the first place.** How the objects were
+lost was never established, but the GC is a candidate and is now hardened. The
+controller reclaims a claim when the claiming pod reads back `NotFound` — through
+`mgr.GetClient()`, which answers from an informer cache. A cold, lagging or
+repopulating cache reports `NotFound` for a pod that is running, and the claim of
+a live pod is then deleted, after which nothing restored it. It now confirms the
+absence through `mgr.GetAPIReader()` before deleting. This is a hypothesis about
+the incident, not a proven cause — but a destructive action taken on *absence*
+should not trust a cache either way.
+
+**What to take from this.** Reachability state that is written once, by a
+short-lived process, at an event nobody will see again, has no repair path. Either
+something owns it as derived state and re-derives it, or its loss is permanent and
+silent. Ask of any such record: what re-creates this if it vanishes at 3am?

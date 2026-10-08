@@ -45,9 +45,9 @@ import (
 // (controller). The UID is the load-bearing one — a reused pod name must never
 // let a stale DEL reap the new pod's address.
 const (
-	labelFabricPodUID = "local.sdn.cozystack.io/pod-uid"
-	labelFabricPodNS  = "local.sdn.cozystack.io/pod-namespace"
-	labelFabricNode   = "local.sdn.cozystack.io/node"
+	labelFabricPodUID = localv1alpha1.LabelFabricPodUID
+	labelFabricPodNS  = localv1alpha1.LabelFabricPodNamespace
+	labelFabricNode   = localv1alpha1.LabelFabricNode
 )
 
 func localClient() (localclientset.Interface, error) {

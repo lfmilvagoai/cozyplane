@@ -410,6 +410,14 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, genevePort ui
 	}
 	fabricResync() // nodes are known now; catch FabricIPs seen before their node
 
+	// A claim is derived state, so heal the ones CNI ADD is no longer around to
+	// have written: a running pod without one is reachable from its own node and
+	// nowhere else (cmd/agent/fabricip_heal.go). The claim lister is already
+	// cached by the watch above; the pods are one node-scoped List per pass.
+	go healFabricIPs(ctx, client, lc,
+		localFactory.Local().V1alpha1().FabricIPs().Lister(),
+		nodeName, fabricHealInterval, log)
+
 	// Default-net NetworkPolicy (docs/network-policy.md): compile upstream
 	// NetworkPolicies into the pinned NP maps. Fatal on failure like
 	// watchNodes — policy must be fed or the node must not serve.
@@ -2093,6 +2101,16 @@ func serveMetrics(ctx context.Context, mgr *datapath.Manager, vpcs sdnv1alpha1in
 		}
 		fmt.Fprintf(&b, "# HELP cozyplane_np_sync_errors_total NetworkPolicy compiler sync failures (this node).\n# TYPE cozyplane_np_sync_errors_total counter\n")
 		fmt.Fprintf(&b, "cozyplane_np_sync_errors_total{node=\"%s\"} %d\n", nodeName, npSyncErrors.Load())
+
+		// Underlay claims (docs/bringup-field-notes.md §14). fabric_ips_missing
+		// is the one to alert on: non-zero means pods on this node are
+		// unreachable from every other node, which has no local symptom at all.
+		fmt.Fprintf(&b, "# HELP cozyplane_fabric_ips_missing Pods on this node holding an address with no FabricIP claim (last heal pass).\n# TYPE cozyplane_fabric_ips_missing gauge\n")
+		fmt.Fprintf(&b, "cozyplane_fabric_ips_missing{node=\"%s\"} %d\n", nodeName, fabricMissing.Load())
+		fmt.Fprintf(&b, "# HELP cozyplane_fabric_ips_conflicted FabricIP claims wanted by a pod on this node but held by a different pod (last heal pass).\n# TYPE cozyplane_fabric_ips_conflicted gauge\n")
+		fmt.Fprintf(&b, "cozyplane_fabric_ips_conflicted{node=\"%s\"} %d\n", nodeName, fabricConflict.Load())
+		fmt.Fprintf(&b, "# HELP cozyplane_fabric_ips_healed_total FabricIP claims this agent re-created for a pod that already held the address.\n# TYPE cozyplane_fabric_ips_healed_total counter\n")
+		fmt.Fprintf(&b, "cozyplane_fabric_ips_healed_total{node=\"%s\"} %d\n", nodeName, fabricHealed.Load())
 
 		// Host firewall (docs/host-firewall.md), by direction.
 		if drops, err := mgr.HFDrops(); err == nil {
