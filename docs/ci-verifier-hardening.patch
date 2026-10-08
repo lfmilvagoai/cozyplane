@@ -1,0 +1,22 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index ecc7da3..04aa2ed 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -97,5 +97,3 @@ jobs:
+-  # The compiled eBPF object (datapath/overlay_bpfel.*) is committed and embedded
+-  # via go:embed. Regenerate it from the runner's kernel BTF and flag drift. The
+-  # exact object bytes are clang-version sensitive, so this is informational
+-  # (non-blocking): what it reliably guards is the generated Go bindings
+-  # (map/struct layout), which must match bpf/overlay.c.
++  # Regenerate the committed eBPF object and load every tc entry point through
++  # the kernel verifier. Exact object bytes remain clang-version sensitive, but
++  # compilation and verifier acceptance are release-blocking.
+@@ -104 +101,0 @@ jobs:
+-    continue-on-error: true
+@@ -128,0 +126,6 @@ jobs:
++      - name: kernel verifier
++        run: |
++          pin=/sys/fs/bpf/cozyplane-ci-${GITHUB_RUN_ID}
++          case "$pin" in /sys/fs/bpf/cozyplane-ci-*) ;; *) exit 2 ;; esac
++          trap 'sudo rm -rf -- "$pin"' EXIT
++          sudo bpftool prog loadall datapath/overlay_bpfel.o "$pin" type classifier
