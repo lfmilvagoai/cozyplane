@@ -98,7 +98,9 @@ whose claiming pod is gone. The fabric side simply never had an object to reap.
   allocator; the heal only restores the record of an address a pod already holds,
   and cannot race it, because a pod has no `status.podIP` until the claim that
   chose it succeeded. Reclaiming the other direction stays the controller's, with
-  its cluster-wide view — one reaper is the right number.
+  its cluster-wide view — one reaper is the right number. The pair is what makes
+  the GC's reclaim-on-absence safe to leave alone: if it ever deletes a claim it
+  should not have, the heal puts it back, so neither side needs to be certain.
 
 ## The pool is FLAT — no per-node podCIDR carve-out
 
