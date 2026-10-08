@@ -30,6 +30,19 @@ func EscapeIP(ip string) string {
 	return strings.NewReplacer(".", "-", ":", "-").Replace(ip)
 }
 
+// The labels every claim carries. Defined here, not at the writers: CNI ADD and
+// the agent's heal pass both create claims, and a claim one of them cannot find
+// by selector is a claim that leaks. One definition, so the compiler keeps them
+// identical.
+const (
+	// LabelFabricPodUID is the claiming pod's UID (stable across name reuse).
+	LabelFabricPodUID = "local.sdn.cozystack.io/pod-uid"
+	// LabelFabricPodNamespace is the claiming pod's namespace.
+	LabelFabricPodNamespace = "local.sdn.cozystack.io/pod-namespace"
+	// LabelFabricNode is the node the claiming pod is scheduled to.
+	LabelFabricNode = "local.sdn.cozystack.io/node"
+)
+
 // FabricIPName is the claim name of the underlay address `ip`. The NAME is the
 // claim: creating it is the allocation, and the API server's name uniqueness is
 // what makes it atomic cluster-wide. No lock file, no per-node range, no

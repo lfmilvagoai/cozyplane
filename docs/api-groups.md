@@ -88,6 +88,19 @@ whose claiming pod is gone. The fabric side simply never had an object to reap.
 - The CNI stops shelling out to `host-local` for the default network and claims
   through the API — which it already talks to on every ADD anyway, to read the
   pod.
+- The claim set is **derived state, not a side effect of ADD**. The agent re-creates
+  the claim of any pod on its node that holds an address without one, every
+  minute, and exports `cozyplane_fabric_ips_missing`. It has to: `remotes` is fed
+  from these objects, so a pod whose claim disappears is reachable from its own
+  node and nowhere else, which looks like nothing locally and takes down every
+  cross-node caller — including the admission webhooks in front of it
+  ([bringup-field-notes.md](bringup-field-notes.md) §14). ADD remains the
+  allocator; the heal only restores the record of an address a pod already holds,
+  and cannot race it, because a pod has no `status.podIP` until the claim that
+  chose it succeeded. Reclaiming the other direction stays the controller's, with
+  its cluster-wide view — one reaper is the right number. The pair is what makes
+  the GC's reclaim-on-absence safe to leave alone: if it ever deletes a claim it
+  should not have, the heal puts it back, so neither side needs to be certain.
 
 ## The pool is FLAT — no per-node podCIDR carve-out
 
