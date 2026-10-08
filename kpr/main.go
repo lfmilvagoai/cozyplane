@@ -181,11 +181,14 @@ func main() {
 	} else {
 		logger.Info("managing only Services with the given service-proxy-name", "name", serviceProxyName)
 	}
-	go func() {
-		if err := runServiceVIPs(context.Background(), pinDir, nodeName, clusterDSR, serviceProxyName, logger); err != nil {
-			logger.Error("svc_vips reconciler exited", "err", err)
-		}
-	}()
+	// Restarted on exit, not run once: svc_vips is the datapath's only source of
+	// Service state, and every stage this owns is idempotent (the pin waits loop,
+	// and seed() is a full pass that sweeps leftovers), so re-running it is the
+	// recovery. See runWithRestart for what one-shot cost us.
+	go runWithRestart(context.Background(), "svc_vips reconciler", defaultRestart,
+		func(ctx context.Context) error {
+			return runServiceVIPs(ctx, pinDir, nodeName, clusterDSR, serviceProxyName, logger)
+		}, logger)
 
 	if err := h.Run(logger); err != nil {
 		os.Exit(1)
