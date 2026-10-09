@@ -286,6 +286,45 @@ func AdoptVethPortIdentity(ifindex int, expectedAlias string, id PortVethIdentit
 	return updated, err
 }
 
+// PodVethName is the host-side name the CNI gives a sandbox's primary veth.
+// The CNI and the agent's legacy-sandbox recovery must agree on it exactly.
+func PodVethName(containerID string) string {
+	if len(containerID) > 11 {
+		containerID = containerID[:11]
+	}
+	return podVethPrefix + containerID
+}
+
+// RecordLegacyVethSandbox fills the absent sandbox witness of an endpoint wired
+// by a CNI release that predates it. It only touches an unchanged record that
+// has no witness yet, and never activates delivery.
+func RecordLegacyVethSandbox(ifindex int, expectedAlias, containerID, ifName string) error {
+	if containerID == "" || ifName == "" {
+		return fmt.Errorf("incomplete sandbox witness")
+	}
+	return withBridgeLock(func() error {
+		link, err := netlink.LinkByIndex(ifindex)
+		if err != nil {
+			return err
+		}
+		if link.Type() != "veth" || link.Attrs().Alias != expectedAlias {
+			return fmt.Errorf("endpoint changed before sandbox recovery")
+		}
+		raw, ips, mac, valid := parseVethAlias(expectedAlias)
+		if !valid || raw == QuarantineNet {
+			return fmt.Errorf("invalid endpoint for sandbox recovery")
+		}
+		if cid, iface := VethSandbox(expectedAlias); cid != "" || iface != "" {
+			return fmt.Errorf("endpoint already records a sandbox")
+		}
+		alias := aliasWithPortIdentity(aliasWithSandbox(FormatVethAlias(raw, ips, mac), containerID, ifName), VethPortIdentity(expectedAlias))
+		if len(alias) > 255 {
+			return fmt.Errorf("endpoint alias exceeds Linux limit")
+		}
+		return netlink.LinkSetAlias(link, alias)
+	})
+}
+
 type PortVethIdentity struct {
 	UID    string
 	Staged bool

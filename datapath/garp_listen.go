@@ -39,6 +39,7 @@ import (
 
 // LocalPortVeth is a host-side pod/gateway veth with a rebuild alias.
 type LocalPortVeth struct {
+	Name        string
 	Net         uint32
 	IPs         []net.IP
 	MAC         net.HardwareAddr
@@ -73,7 +74,7 @@ func ListLocalPortVeths() ([]LocalPortVeth, error) {
 			continue
 		}
 		cid, iface := VethSandbox(l.Attrs().Alias)
-		out = append(out, LocalPortVeth{Net: PortNet(rawNet), IPs: ips, MAC: mac, Ifindex: l.Attrs().Index, Alias: l.Attrs().Alias, PortUID: VethPortIdentity(l.Attrs().Alias).UID, ContainerID: cid, IfName: iface, RawNet: rawNet})
+		out = append(out, LocalPortVeth{Name: name, Net: PortNet(rawNet), IPs: ips, MAC: mac, Ifindex: l.Attrs().Index, Alias: l.Attrs().Alias, PortUID: VethPortIdentity(l.Attrs().Alias).UID, ContainerID: cid, IfName: iface, RawNet: rawNet})
 	}
 	return out, nil
 }

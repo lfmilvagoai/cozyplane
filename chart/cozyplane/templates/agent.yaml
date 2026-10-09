@@ -80,9 +80,11 @@ rules:
   # FabricIPs: the CNI plugin claims/releases underlay addresses through this SA
   # (the agent writes its kubeconfig), the agent watches them. deletecollection
   # serves a failed ADD's rollback; it reaches nothing list+delete could not.
+  # update lets the agent record a recovered sandbox on a legacy claim
+  # (cmd/agent/legacy_sandbox.go) instead of deleting and recreating it.
   - apiGroups: ["local.sdn.cozystack.io"]
     resources: ["fabricips"]
-    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+    verbs: ["get", "list", "watch", "create", "update", "delete", "deletecollection"]
   # HostFirewalls: the agent compiles the objects selecting its node into the
   # hf_allow map and arms enforcement (docs/host-firewall.md).
   - apiGroups: ["sdn.cozystack.io"]

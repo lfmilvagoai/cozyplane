@@ -1543,11 +1543,7 @@ func netFromPortName(name string) (uint32, bool) {
 func cmdCheck(args *skel.CmdArgs) error { return nil }
 
 func hostVethNameFor(containerID string) string {
-	id := containerID
-	if len(id) > 11 {
-		id = id[:11]
-	}
-	return hostVethPrefix + id
+	return datapath.PodVethName(containerID)
 }
 
 // gwHostVethNameFor names the host side of a gateway pod's VPC leg.

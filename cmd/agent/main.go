@@ -550,6 +550,7 @@ func run(nodeName string, mtu int, vni uint32, cniConfName string, writeCNI bool
 			}
 			watchBoundaries(ctx, factory, sdnClient, mgr, nodeName, log)
 			factory.Start(ctx.Done())
+			go recoverLegacySandboxes(ctx, client, lc, sdnClient, nodeName, fabricHealInterval, log)
 			return nil
 		}
 		if err := gateSDNInformers(ctx, cfg, register, log); err != nil {
