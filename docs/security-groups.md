@@ -390,7 +390,10 @@ allocation (so a denied packet leaks no connection state):
    `from: {cidr: 0.0.0.0/0}` rule compiles to the `SG_WORLD` bit (the agent
    already does this), so `allowed & srcmap` admits it. An ungrouped pod
    short-circuits to allow. No rule ⇒ drop (+ `sg_drops`). Stateless in the
-   client IP, so every packet of a flow decides the same way — no SYN-gate.
+   client IP, so every packet of a flow decides the same way. The floating path
+   gates TCP on a new connection only (SYN, no ACK), like every other SG gate: a
+   floating pod's own outbound flows (admitted by its `to: {cidr}` rules) must get
+   their replies back through the public IP. UDP stays gated per packet.
 
 The east-west `to_pod` check is unchanged (it runs only for non-bridge,
 non-floating traffic — those paths return earlier).

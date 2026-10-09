@@ -3677,12 +3677,16 @@ static __always_inline int floating_forward(struct __sk_buff *skb, struct iphdr 
 	// North-south security groups (v2): a floating IP is a deliberate external
 	// surface, so it is gated unconditionally (external clients are never
 	// kubelet/node-originated — the fabric IP carries those). Default-deny for a
-	// grouped pod, reopened by a from.cidr rule.
+	// grouped pod, reopened by a from.cidr rule. TCP is gated on a NEW connection
+	// only (SYN, no ACK), as at every other SG gate: the reply to a flow the pod
+	// opened through its public IP (admitted by its egress rules) carries ACK and
+	// must come back. UDP stays gated per packet.
 	if (proto == IPPROTO_TCP || proto == IPPROTO_UDP) {
-		__u16 sp, dp;
+		__u16 sp, dp, gated;
 		struct addr128 client128;
 		v4_to_128(&client128, ip->saddr);
-		if (l4_ports(skb, &sp, &dp) == 0 && !ns_sg_admit(net, &vpc_ip, &client128, cidr_proto(proto, 0), dp)) {
+		if (sg_l4(skb, proto, L4_OFF, &gated) && l4_ports(skb, &sp, &dp) == 0 &&
+		    !ns_sg_admit(net, &vpc_ip, &client128, cidr_proto(proto, 0), dp)) {
 			count_sg_drop(net);
 			flow_emit(&client128, &vpc_ip, FE_NETS(0, net), FE_PORTS(sp, dp),
 				  FE_META(FE_V_DENY, FR_SG_NS, FE_TO_POD, NS_EIP, 0, proto));
@@ -4216,10 +4220,12 @@ static __always_inline int floating_forward6(struct __sk_buff *skb, struct pkt *
 		return TC_ACT_SHOT;
 	}
 	// North-south security groups (v2), the v6 twin of floating_forward: gated
-	// unconditionally (external surface, never node-originated).
+	// unconditionally (external surface, never node-originated), TCP on a new
+	// connection only so the replies of the pod's own flows come back.
 	if (proto == IPPROTO_TCP || proto == IPPROTO_UDP) {
-		__u16 sp, dp;
-		if (l4_ports6(skb, &sp, &dp) == 0 && !ns_sg_admit(net, &vpc_ip, &p->src, cidr_proto(proto, 1), dp)) {
+		__u16 sp, dp, gated;
+		if (sg_l4(skb, proto, L4_OFF6, &gated) && l4_ports6(skb, &sp, &dp) == 0 &&
+		    !ns_sg_admit(net, &vpc_ip, &p->src, cidr_proto(proto, 1), dp)) {
 			count_sg_drop(net);
 			flow_emit(&p->src, &vpc_ip, FE_NETS(0, net), FE_PORTS(sp, dp),
 				  FE_META(FE_V_DENY, FR_SG_NS, FE_TO_POD, NS_EIP, 0, proto));
