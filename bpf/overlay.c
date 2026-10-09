@@ -2512,6 +2512,27 @@ static __always_inline int parse_ipv4(struct __sk_buff *skb, struct iphdr **ip)
 	return 0;
 }
 
+// A NIC hands up a frame that missed its receive buffer with only the Ethernet
+// header in the linear area (virtio_net page_to_skb copies ETH_HLEN and leaves the
+// rest in page frags). GRO pulls the headers of what it aggregates (TCP), never
+// those of an ICMP or plain UDP frame, so direct packet access missed them and
+// fail-closed paths dropped the packet: large pings and VPN datagrams vanished
+// intermittently. Every entry program pulls the headers it parses first, before
+// any packet pointer exists (the helper invalidates them).
+#define PULL_HEADERS_LEN 128
+static __always_inline void pull_headers(struct __sk_buff *skb)
+{
+	__u32 want = skb->len < PULL_HEADERS_LEN ? skb->len : PULL_HEADERS_LEN;
+	__u64 data, end;
+	// Opaque loads: plain reads let LLVM keep the field offsets in callee-saved
+	// registers across the helper call and rebuild ctx+off for the caller's own
+	// reads, which the verifier rejects ("dereference of modified ctx ptr").
+	asm volatile("%0 = *(u32 *)(%1 + %2)" : "=r"(data) : "r"(skb), "i"(__builtin_offsetof(struct __sk_buff, data)));
+	asm volatile("%0 = *(u32 *)(%1 + %2)" : "=r"(end) : "r"(skb), "i"(__builtin_offsetof(struct __sk_buff, data_end)));
+	if ((long)end - (long)data < (long)want)
+		bpf_skb_pull_data(skb, want);
+}
+
 // Policy/NAT helpers use fixed L4 offsets. Never send an IP header they cannot
 // interpret down a permissive kernel fallback: options, fragments and IPv6
 // extension chains could hide a TCP SYN or UDP destination port from policy.
@@ -4924,6 +4945,7 @@ struct {
 SEC("tc")
 int cozyplane_lb_ingress(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	struct pkt p;
 	if (parse_ip(skb, &p) < 0)
 		return TC_ACT_NEXT;
@@ -5127,6 +5149,7 @@ miss:
 SEC("tc")
 int cozyplane_hf_ingress(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	struct pkt p;
 	if (parse_ip(skb, &p) < 0)
 		return TC_ACT_OK;
@@ -5245,6 +5268,7 @@ int cozyplane_hf_ingress(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_hf_egress(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	struct pkt p;
 	if (parse_ip(skb, &p) < 0)
 		return TC_ACT_OK;
@@ -5307,6 +5331,7 @@ int cozyplane_hf_egress(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_lb_dsr(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	struct lb_geneve_opt lopt;
 	if (bpf_skb_get_tunnel_opt(skb, (void *)&lopt, sizeof(lopt)) < (int)sizeof(lopt) ||
 	    lopt.opt_class != bpf_htons(SG_OPT_CLASS) || lopt.type != LB_OPT_TYPE)
@@ -5810,6 +5835,7 @@ static __attribute__((noinline)) int boundary_guest_config(struct __sk_buff *skb
 SEC("tc")
 int cozyplane_from_pod(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	__u32 origin = skb->ifindex;
 	__u32 *state = bpf_map_lookup_elem(&ports, &origin);
 	if (state && *state == PORT_QUARANTINE) return TC_ACT_SHOT;
@@ -6369,6 +6395,7 @@ int cozyplane_from_pod_continue(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_to_pod(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	__u32 zero = 0, net = 0;
 	__u32 ifindex = skb->ifindex;
 	__u32 *port = bpf_map_lookup_elem(&ports, &ifindex);
@@ -6708,6 +6735,7 @@ int cozyplane_to_pod_continue(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_from_overlay(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	// Decapsulation establishes a new trust boundary; only validated tunnel
 	// metadata and scoped lookup below may assign private delivery proofs.
 	skb->mark &= ~(GW_MARK | SG_OK | NS_MARK | FWD_MARK | VPC_MARK);
@@ -6915,6 +6943,7 @@ int cozyplane_from_overlay(struct __sk_buff *skb)
 SEC("tc")
 int cozyplane_from_uplink(struct __sk_buff *skb)
 {
+	pull_headers(skb);
 	if (unsupported_ip_header(skb))
 		return TC_ACT_SHOT;
 	struct iphdr *ip;
