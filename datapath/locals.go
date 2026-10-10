@@ -31,6 +31,9 @@ import (
 // eBPF redirect (through the to_pod hook), not a kernel-routing shortcut. Used
 // by the CNI plugin via the pinned map.
 func SetLocal(net_ uint32, podIP net.IP, ifindex int, mac net.HardwareAddr) error {
+	if _, err := Ifindex(ifindex); err != nil {
+		return err
+	}
 	return withBridgeLock(func() error { return setLocal(net_, podIP, ifindex, mac) })
 }
 
