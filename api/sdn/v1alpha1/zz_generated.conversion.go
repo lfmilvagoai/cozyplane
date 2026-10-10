@@ -835,6 +835,36 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*VPNWireGuardAddressPool)(nil), (*sdn.VPNWireGuardAddressPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool(a.(*VPNWireGuardAddressPool), b.(*sdn.VPNWireGuardAddressPool), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*sdn.VPNWireGuardAddressPool)(nil), (*VPNWireGuardAddressPool)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool(a.(*sdn.VPNWireGuardAddressPool), b.(*VPNWireGuardAddressPool), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*VPNWireGuardClient)(nil), (*sdn.VPNWireGuardClient)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient(a.(*VPNWireGuardClient), b.(*sdn.VPNWireGuardClient), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*sdn.VPNWireGuardClient)(nil), (*VPNWireGuardClient)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient(a.(*sdn.VPNWireGuardClient), b.(*VPNWireGuardClient), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*VPNWireGuardClientConfig)(nil), (*sdn.VPNWireGuardClientConfig)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig(a.(*VPNWireGuardClientConfig), b.(*sdn.VPNWireGuardClientConfig), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*sdn.VPNWireGuardClientConfig)(nil), (*VPNWireGuardClientConfig)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig(a.(*sdn.VPNWireGuardClientConfig), b.(*VPNWireGuardClientConfig), scope)
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -3235,6 +3265,15 @@ func autoConvert_v1alpha1_VPNConnectionStatus_To_sdn_VPNConnectionStatus(in *VPN
 	out.LastHandshake = in.LastHandshake
 	out.ObservedAt = in.ObservedAt
 	out.AssignedAddresses = in.AssignedAddresses
+	if in.ClientConfig != nil {
+		in, out := &in.ClientConfig, &out.ClientConfig
+		*out = new(sdn.VPNWireGuardClientConfig)
+		if err := Convert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.ClientConfig = nil
+	}
 	out.Conditions = in.Conditions
 	return nil
 }
@@ -3249,6 +3288,15 @@ func autoConvert_sdn_VPNConnectionStatus_To_v1alpha1_VPNConnectionStatus(in *sdn
 	out.LastHandshake = in.LastHandshake
 	out.ObservedAt = in.ObservedAt
 	out.AssignedAddresses = in.AssignedAddresses
+	if in.ClientConfig != nil {
+		in, out := &in.ClientConfig, &out.ClientConfig
+		*out = new(VPNWireGuardClientConfig)
+		if err := Convert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.ClientConfig = nil
+	}
 	out.Conditions = in.Conditions
 	return nil
 }
@@ -3259,6 +3307,15 @@ func Convert_sdn_VPNConnectionStatus_To_v1alpha1_VPNConnectionStatus(in *sdn.VPN
 }
 
 func autoConvert_v1alpha1_VPNConnectionWireGuard_To_sdn_VPNConnectionWireGuard(in *VPNConnectionWireGuard, out *sdn.VPNConnectionWireGuard, s conversion.Scope) error {
+	if in.Client != nil {
+		in, out := &in.Client, &out.Client
+		*out = new(sdn.VPNWireGuardClient)
+		if err := Convert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Client = nil
+	}
 	out.PeerPublicKey = in.PeerPublicKey
 	out.PeerPublicKeys = in.PeerPublicKeys
 	out.PeerEndpoint = in.PeerEndpoint
@@ -3274,6 +3331,15 @@ func Convert_v1alpha1_VPNConnectionWireGuard_To_sdn_VPNConnectionWireGuard(in *V
 }
 
 func autoConvert_sdn_VPNConnectionWireGuard_To_v1alpha1_VPNConnectionWireGuard(in *sdn.VPNConnectionWireGuard, out *VPNConnectionWireGuard, s conversion.Scope) error {
+	if in.Client != nil {
+		in, out := &in.Client, &out.Client
+		*out = new(VPNWireGuardClient)
+		if err := Convert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.Client = nil
+	}
 	out.PeerPublicKey = in.PeerPublicKey
 	out.PeerPublicKeys = in.PeerPublicKeys
 	out.PeerEndpoint = in.PeerEndpoint
@@ -3706,6 +3772,17 @@ func Convert_sdn_VPNGatewayVirtualMachine_To_v1alpha1_VPNGatewayVirtualMachine(i
 
 func autoConvert_v1alpha1_VPNGatewayWireGuard_To_sdn_VPNGatewayWireGuard(in *VPNGatewayWireGuard, out *sdn.VPNGatewayWireGuard, s conversion.Scope) error {
 	out.ListenPort = in.ListenPort
+	if in.AddressPools != nil {
+		in, out := &in.AddressPools, &out.AddressPools
+		*out = make([]sdn.VPNWireGuardAddressPool, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AddressPools = nil
+	}
 	return nil
 }
 
@@ -3716,6 +3793,17 @@ func Convert_v1alpha1_VPNGatewayWireGuard_To_sdn_VPNGatewayWireGuard(in *VPNGate
 
 func autoConvert_sdn_VPNGatewayWireGuard_To_v1alpha1_VPNGatewayWireGuard(in *sdn.VPNGatewayWireGuard, out *VPNGatewayWireGuard, s conversion.Scope) error {
 	out.ListenPort = in.ListenPort
+	if in.AddressPools != nil {
+		in, out := &in.AddressPools, &out.AddressPools
+		*out = make([]VPNWireGuardAddressPool, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.AddressPools = nil
+	}
 	return nil
 }
 
@@ -3788,4 +3876,100 @@ func autoConvert_sdn_VPNIPsecEAPAuth_To_v1alpha1_VPNIPsecEAPAuth(in *sdn.VPNIPse
 // Convert_sdn_VPNIPsecEAPAuth_To_v1alpha1_VPNIPsecEAPAuth is an autogenerated conversion function.
 func Convert_sdn_VPNIPsecEAPAuth_To_v1alpha1_VPNIPsecEAPAuth(in *sdn.VPNIPsecEAPAuth, out *VPNIPsecEAPAuth, s conversion.Scope) error {
 	return autoConvert_sdn_VPNIPsecEAPAuth_To_v1alpha1_VPNIPsecEAPAuth(in, out, s)
+}
+
+func autoConvert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool(in *VPNWireGuardAddressPool, out *sdn.VPNWireGuardAddressPool, s conversion.Scope) error {
+	out.Name = in.Name
+	out.CIDR = in.CIDR
+	out.DNS = in.DNS
+	return nil
+}
+
+// Convert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool is an autogenerated conversion function.
+func Convert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool(in *VPNWireGuardAddressPool, out *sdn.VPNWireGuardAddressPool, s conversion.Scope) error {
+	return autoConvert_v1alpha1_VPNWireGuardAddressPool_To_sdn_VPNWireGuardAddressPool(in, out, s)
+}
+
+func autoConvert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool(in *sdn.VPNWireGuardAddressPool, out *VPNWireGuardAddressPool, s conversion.Scope) error {
+	out.Name = in.Name
+	out.CIDR = in.CIDR
+	out.DNS = in.DNS
+	return nil
+}
+
+// Convert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool is an autogenerated conversion function.
+func Convert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool(in *sdn.VPNWireGuardAddressPool, out *VPNWireGuardAddressPool, s conversion.Scope) error {
+	return autoConvert_sdn_VPNWireGuardAddressPool_To_v1alpha1_VPNWireGuardAddressPool(in, out, s)
+}
+
+func autoConvert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient(in *VPNWireGuardClient, out *sdn.VPNWireGuardClient, s conversion.Scope) error {
+	out.AddressPools = in.AddressPools
+	if in.VPCRefs != nil {
+		in, out := &in.VPCRefs, &out.VPCRefs
+		*out = make([]sdn.LocalVPCRef, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_LocalVPCRef_To_sdn_LocalVPCRef(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.VPCRefs = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient is an autogenerated conversion function.
+func Convert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient(in *VPNWireGuardClient, out *sdn.VPNWireGuardClient, s conversion.Scope) error {
+	return autoConvert_v1alpha1_VPNWireGuardClient_To_sdn_VPNWireGuardClient(in, out, s)
+}
+
+func autoConvert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient(in *sdn.VPNWireGuardClient, out *VPNWireGuardClient, s conversion.Scope) error {
+	out.AddressPools = in.AddressPools
+	if in.VPCRefs != nil {
+		in, out := &in.VPCRefs, &out.VPCRefs
+		*out = make([]LocalVPCRef, len(*in))
+		for i := range *in {
+			if err := Convert_sdn_LocalVPCRef_To_v1alpha1_LocalVPCRef(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.VPCRefs = nil
+	}
+	return nil
+}
+
+// Convert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient is an autogenerated conversion function.
+func Convert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient(in *sdn.VPNWireGuardClient, out *VPNWireGuardClient, s conversion.Scope) error {
+	return autoConvert_sdn_VPNWireGuardClient_To_v1alpha1_VPNWireGuardClient(in, out, s)
+}
+
+func autoConvert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig(in *VPNWireGuardClientConfig, out *sdn.VPNWireGuardClientConfig, s conversion.Scope) error {
+	out.Endpoint = in.Endpoint
+	out.ServerPublicKey = in.ServerPublicKey
+	out.AllowedIPs = in.AllowedIPs
+	out.DNS = in.DNS
+	out.MTU = in.MTU
+	out.PersistentKeepalive = in.PersistentKeepalive
+	return nil
+}
+
+// Convert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig is an autogenerated conversion function.
+func Convert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig(in *VPNWireGuardClientConfig, out *sdn.VPNWireGuardClientConfig, s conversion.Scope) error {
+	return autoConvert_v1alpha1_VPNWireGuardClientConfig_To_sdn_VPNWireGuardClientConfig(in, out, s)
+}
+
+func autoConvert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig(in *sdn.VPNWireGuardClientConfig, out *VPNWireGuardClientConfig, s conversion.Scope) error {
+	out.Endpoint = in.Endpoint
+	out.ServerPublicKey = in.ServerPublicKey
+	out.AllowedIPs = in.AllowedIPs
+	out.DNS = in.DNS
+	out.MTU = in.MTU
+	out.PersistentKeepalive = in.PersistentKeepalive
+	return nil
+}
+
+// Convert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig is an autogenerated conversion function.
+func Convert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig(in *sdn.VPNWireGuardClientConfig, out *VPNWireGuardClientConfig, s conversion.Scope) error {
+	return autoConvert_sdn_VPNWireGuardClientConfig_To_v1alpha1_VPNWireGuardClientConfig(in, out, s)
 }

@@ -29,6 +29,7 @@ func TestIPsecPoolNameBudgetBeforeVICIAndKernel(t *testing.T) {
 	if len(sess.commands) != 0 {
 		t.Fatal("oversized name reached VICI")
 	}
+	requireStartupCleanupCapability(t)
 	for _, cfg := range []config{{Pools: []addressPool{{Name: bad, CIDR: "192.0.2.0/24"}}}, {Peers: []peer{p}}} {
 		raw, err := json.Marshal(cfg)
 		if err != nil {
@@ -84,7 +85,7 @@ func TestIPsecPoolNameFitsActualVICIWire(t *testing.T) {
 			done <- fmt.Errorf("pool section was not encoded with its exact 255-byte name")
 			return
 		}
-		_, err := serverConn.Write([]byte{0, 0, 0, 1, 1}) // empty CMD_RESPONSE
+		_, err := serverConn.Write([]byte{0, 0, 0, 15, 1, 3, 7, 's', 'u', 'c', 'c', 'e', 's', 's', 0, 3, 'y', 'e', 's'}) // CMD_RESPONSE success=yes
 		if err == nil {
 			// A real daemon keeps the transport open after replying. Closing
 			// here would race queued response delivery against an unrelated EOF.

@@ -229,15 +229,16 @@ func haMode(gw *sdnv1alpha1.VPNGateway) sdnv1alpha1.VPNGatewayHAMode {
 	return ""
 }
 
-// +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpngateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpngateways,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpcs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpngateways/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpnconnections,verbs=get;list;watch
+// +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpnconnections,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpnconnections/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=vpcbindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=floatingips,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sdn.cozystack.io,resources=ports,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
@@ -256,6 +257,16 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 	if !gw.DeletionTimestamp.IsZero() {
+		if slices.Contains(gw.Finalizers, wgClientFinalizer) {
+			done, err := r.finalizeWGClientGateway(ctx, gw)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if !done {
+				return ctrl.Result{RequeueAfter: wgClientCleanupPoll}, nil
+			}
+			return ctrl.Result{}, nil
+		}
 		return r.reportUnready(ctx, gw, "GatewayTerminating", "VPNGateway is being deleted")
 	}
 	if problem := vpnGatewayInputProblem(gw); problem != "" {
@@ -309,6 +320,34 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 	backend := backendOf(gw)
+	if backend == backendIPsec {
+		for i := range conns {
+			if conns[i].Spec.IPsec == nil || conns[i].Spec.WireGuard != nil {
+				return r.configurationFailure(ctx, gw, fmt.Errorf("IPsec gateways require IPsec connections"))
+			}
+		}
+	}
+	clientMode := isWGClientGateway(gw)
+	if clientMode {
+		if err := r.validateWGClientPools(ctx, gw, servedVPCs, servedCIDRs); err != nil {
+			return r.configurationFailure(ctx, gw, err)
+		}
+		if err := r.ensureWGClientFinalizers(ctx, gw, nil); err != nil {
+			return r.configurationFailure(ctx, gw, err)
+		}
+		if err := r.allocateWGClients(ctx, gw, servedVPCs, conns); err != nil {
+			return r.configurationFailure(ctx, gw, err)
+		}
+		if err := r.ensureWGClientFinalizers(ctx, gw, conns); err != nil {
+			return r.configurationFailure(ctx, gw, err)
+		}
+	} else {
+		for i := range conns {
+			if conns[i].Spec.WireGuard != nil && conns[i].Spec.WireGuard.Client != nil {
+				return r.configurationFailure(ctx, gw, fmt.Errorf("WireGuard clients require a dedicated client gateway"))
+			}
+		}
+	}
 	if err := applyIPsecAddressPools(gw, conns); err != nil {
 		return r.reportUnready(ctx, gw, "AddressPoolInvalid", err.Error())
 	}
@@ -354,12 +393,30 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return r.configurationFailure(ctx, gw, err)
 	}
+	clientConfigApplied := true
+	if clientMode {
+		clientConfigApplied, err = r.wgClientConfigApplied(ctx, gw, checksum, true)
+		if err != nil {
+			clientConfigApplied = false
+		}
+	}
+	ipsecConfigApplied := true
+	if backend == backendIPsec {
+		ipsecConfigApplied, err = r.ipsecConfigApplied(ctx, gw, checksum)
+		if err != nil {
+			ipsecConfigApplied = false
+		}
+	}
+	grantCIDRs := fwdCIDRs
+	if !ipsecConfigApplied {
+		grantCIDRs = nil
+	}
 
 	// The scoped forwarding grant (increment 2): the appliance may source the
 	// remote CIDRs and nothing else. An empty union means no Ready connection yet
 	// — the bindings still exist (attach authorization) but grant no forwarding.
 	// One binding per served VPC (docs/vpn.md §3.3).
-	if err := r.ensureBindings(ctx, gw, servedVPCs, fwdCIDRs); err != nil {
+	if err := r.ensureBindings(ctx, gw, servedVPCs, grantCIDRs, conns); err != nil {
 		return r.configurationFailure(ctx, gw, err)
 	}
 
@@ -419,16 +476,17 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	for i, served := range servedVPCs {
 		legPorts := appliancePorts
 		if i > 0 {
-			legPorts = nil
-			for _, leg := range r.resolveAppliancePorts(ctx, gw, served, wantAppliances) {
-				legPorts = append(legPorts, leg.Port)
-			}
+			legPorts = r.resolveVPCLegPorts(ctx, gw, served, appliances)
 		}
 		if len(legPorts) != wantAppliances {
 			allLegsReady = false
 			legPorts = nil
 		}
-		for _, route := range connectionRoutes(conns, legPorts) {
+		if (clientMode && !clientConfigApplied) || !ipsecConfigApplied {
+			legPorts = nil
+			allLegsReady = false
+		}
+		for _, route := range connectionRoutes(connectionsForVPC(conns, served.Name), legPorts) {
 			route.VPCRef.Name = served.Name
 			routes = append(routes, route)
 		}
@@ -450,13 +508,16 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		"ApplianceReady", applianceReadyMessage(appliancePort))
 	setVPNGWCondition(&status, sdnv1alpha1.VPNGatewayConditionAddressAssigned, address != "",
 		"AddressAssigned", addressMessage(address))
-	routesReady := allLegsReady && len(appliancePorts) == wantAppliances &&
-		len(routes) == len(nonEmptyRouteConns(conns))*len(servedVPCs)
+	expectedRoutes := 0
+	for _, served := range servedVPCs {
+		expectedRoutes += len(nonEmptyRouteConns(connectionsForVPC(conns, served.Name)))
+	}
+	routesReady := allLegsReady && len(appliancePorts) == wantAppliances && len(routes) == expectedRoutes
 	setVPNGWCondition(&status, sdnv1alpha1.VPNGatewayConditionRoutesProgrammed, routesReady,
 		"RoutesProgrammed", routesMessage(routesReady, len(routes)))
 	setVPNGWCondition(&status, sdnv1alpha1.VPNGatewayConditionRemoteCIDRsAccepted, len(rejectedCIDRs) == 0,
 		remoteCIDRsReason(rejectedCIDRs), remoteCIDRsMessage(rejectedCIDRs))
-	if len(appliancePorts) == wantAppliances && len(addresses) == wantAppliances {
+	if len(appliancePorts) == wantAppliances && len(addresses) == wantAppliances && ipsecConfigApplied {
 		status.Phase = sdnv1alpha1.VPNGatewayPhaseReady
 	}
 
@@ -484,6 +545,20 @@ func (r *VPNGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	if err := r.reflectConnectionStatus(ctx, conns, routesReady, snapshot, snapshotErr); err != nil {
 		return ctrl.Result{}, err
+	}
+	if clientMode {
+		if err := r.reflectWGClientConfig(ctx, gw, servedVPCs, conns, clientConfigApplied && routesReady); err != nil {
+			return ctrl.Result{}, err
+		}
+		if clientConfigApplied {
+			if err := r.releaseWGClientReservations(ctx, gw, conns, false); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: wgClientCleanupPoll}, nil
+	}
+	if !ipsecConfigApplied {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	logger.Info("VPNGateway reconciled", "vpngateway", req.NamespacedName.String(), "phase", status.Phase)
 	return ctrl.Result{RequeueAfter: vpnStatusPollInterval(gw)}, nil
@@ -550,8 +625,17 @@ func (r *VPNGatewayReconciler) teardownOwned(ctx context.Context, gw *sdnv1alpha
 // reportUnready writes a Pending status carrying a single blocking reason when
 // the gateway cannot be realized, after draining its previously active grant.
 func (r *VPNGatewayReconciler) reportUnready(ctx context.Context, gw *sdnv1alpha1.VPNGateway, reason, msg string) (ctrl.Result, error) {
-	if err := r.teardownOwned(ctx, gw); err != nil {
-		return ctrl.Result{}, err
+	if isWGClientGateway(gw) || slices.Contains(gw.Finalizers, wgClientFinalizer) {
+		if err := r.persistWGClientAppliances(ctx, gw); err != nil {
+			return ctrl.Result{}, r.fenceWGClientStateFailure(ctx, gw, err)
+		}
+	}
+	teardownErr := r.teardownOwned(ctx, gw)
+	// Backend edits must not hide a peer's previous successful status. Publish
+	// revocation even if draining an owned resource failed.
+	teardownErr = errors.Join(teardownErr, r.invalidateGatewayConnectionStatuses(ctx, gw, reason, msg))
+	if teardownErr != nil {
+		return ctrl.Result{}, teardownErr
 	}
 	status := sdnv1alpha1.VPNGatewayStatus{Phase: sdnv1alpha1.VPNGatewayPhasePending}
 	if reason != "GatewayTerminating" && (reason != "VPCUnresolved" || len(gw.Spec.AdditionalVPCRefs) > 0) {
@@ -944,6 +1028,9 @@ func (r *VPNGatewayReconciler) ensureKeypairs(ctx context.Context, gw *sdnv1alph
 func (r *VPNGatewayReconciler) buildConfig(ctx context.Context, gw *sdnv1alpha1.VPNGateway,
 	servedVPCs []*sdnv1alpha1.VPC, backend string, privateKeys []string, conns []sdnv1alpha1.VPNConnection) ([]byte, error) {
 	mtu := tunnelMTU(servedVPCs[0].Spec.MTU, backend)
+	if isWGClientGateway(gw) {
+		mtu = wgClientTunnelMTU(servedVPCs)
+	}
 	if backend == backendIPsec {
 		return r.buildIPsecConfig(ctx, gw, servedVPCs, conns, mtu)
 	}
@@ -992,12 +1079,13 @@ func (r *VPNGatewayReconciler) buildWGConfig(ctx context.Context, gw *sdnv1alpha
 		}
 	}
 	type peer struct {
-		Name         string   `json:"name,omitempty"`
-		PublicKey    string   `json:"publicKey"`
-		Endpoint     string   `json:"endpoint,omitempty"`
-		AllowedIPs   []string `json:"allowedIPs"`
-		PresharedKey string   `json:"presharedKey,omitempty"`
-		Keepalive    int      `json:"keepalive,omitempty"`
+		Name                    string   `json:"name,omitempty"`
+		PublicKey               string   `json:"publicKey"`
+		Endpoint                string   `json:"endpoint,omitempty"`
+		AllowedIPs              []string `json:"allowedIPs"`
+		PresharedKey            string   `json:"presharedKey,omitempty"`
+		Keepalive               int      `json:"keepalive,omitempty"`
+		AllowedDestinationCIDRs []string `json:"allowedDestinationCIDRs,omitempty"`
 	}
 	cfg := struct {
 		PrivateKey    string            `json:"privateKey"`
@@ -1007,11 +1095,13 @@ func (r *VPNGatewayReconciler) buildWGConfig(ctx context.Context, gw *sdnv1alpha
 		Peers         []peer            `json:"peers"`
 		PeerInstances [][]peer          `json:"peerInstances,omitempty"`
 		Routing       *vpnRoutingConfig `json:"routing,omitempty"`
+		ClientMode    bool              `json:"clientMode,omitempty"`
 	}{
 		PrivateKeys: append([]string(nil), privateKeys...),
 		ListenPort:  int(r.listenPort(gw)),
 		MTU:         mtu,
 		Routing:     routingConfigFor(gw, servedVPCs),
+		ClientMode:  isWGClientGateway(gw),
 	}
 	if len(privateKeys) > 0 {
 		cfg.PrivateKey = privateKeys[0]
@@ -1054,6 +1144,12 @@ func (r *VPNGatewayReconciler) buildWGConfig(ctx context.Context, gw *sdnv1alpha
 				Name: c.Name, PublicKey: publicKey, Endpoint: endpoint,
 				AllowedIPs:   append([]string(nil), c.Spec.RemoteCIDRs...),
 				PresharedKey: psk, Keepalive: int(c.Spec.WireGuard.PersistentKeepalive),
+				AllowedDestinationCIDRs: func() []string {
+					if c.Spec.WireGuard.Client != nil {
+						return clientDestinationCIDRs(c, servedVPCs)
+					}
+					return nil
+				}(),
 			})
 		}
 	}
@@ -1091,6 +1187,15 @@ func (r *VPNGatewayReconciler) buildIPsecConfig(ctx context.Context, gw *sdnv1al
 	for i := range conns {
 		if ipsec := conns[i].Spec.IPsec; ipsec != nil {
 			certificate, eap := "", ""
+			if ipsec.AddressPool != "" && ipsec.Auth.Certificate == nil && ipsec.Auth.EAP == nil {
+				return nil, fmt.Errorf("IPsec address pools require certificate or EAP authentication")
+			}
+			if ipsec.Auth.EAP != nil && ipsec.AddressPool == "" {
+				return nil, fmt.Errorf("IPsec EAP authentication requires an address pool")
+			}
+			if ipsec.AddressPool != "" && ipsec.StartAction == sdnv1alpha1.VPNIPsecStartActionStart {
+				return nil, fmt.Errorf("pooled IPsec connections must remain responder-only")
+			}
 			if problem := vpnlimits.IPsecPoolNameProblem(ipsec.AddressPool, false); problem != "" {
 				return nil, fmt.Errorf("%s", problem)
 			}
@@ -1121,6 +1226,7 @@ func (r *VPNGatewayReconciler) buildIPsecConfig(ctx context.Context, gw *sdnv1al
 	}
 	type peer struct {
 		Name        string   `json:"name"`
+		LocalCIDRs  []string `json:"localCIDRs"`
 		PeerAddress string   `json:"peerAddress,omitempty"`
 		StartAction string   `json:"startAction,omitempty"`
 		PSK         string   `json:"psk,omitempty"`
@@ -1140,12 +1246,14 @@ func (r *VPNGatewayReconciler) buildIPsecConfig(ctx context.Context, gw *sdnv1al
 	}
 	cfg := struct {
 		MTU         int               `json:"mtu,omitempty"`
+		LocalID     string            `json:"localIdentity,omitempty"`
 		Credentials *credentials      `json:"credentials,omitempty"`
 		Pools       []addressPool     `json:"pools,omitempty"`
 		Peers       []peer            `json:"peers"`
 		Routing     *vpnRoutingConfig `json:"routing,omitempty"`
 	}{MTU: mtu, Routing: routingConfigFor(gw, servedVPCs)}
 	if gw.Spec.IPsec != nil {
+		cfg.LocalID = gw.Spec.IPsec.LocalIdentity
 		for _, pool := range gw.Spec.IPsec.AddressPools {
 			cfg.Pools = append(cfg.Pools, addressPool{Name: pool.Name, CIDR: pool.CIDR, DNS: append([]string(nil), pool.DNS...)})
 		}
@@ -1195,6 +1303,7 @@ func (r *VPNGatewayReconciler) buildIPsecConfig(ctx context.Context, gw *sdnv1al
 		}
 		p := peer{
 			Name:        c.Name,
+			LocalCIDRs:  unionVPCCIDRs(servedVPCs),
 			PeerAddress: c.Spec.IPsec.PeerAddress,
 			StartAction: ipsecStartAction(c.Spec.IPsec),
 			RemoteCIDRs: append([]string(nil), c.Spec.RemoteCIDRs...),
@@ -1203,10 +1312,17 @@ func (r *VPNGatewayReconciler) buildIPsecConfig(ctx context.Context, gw *sdnv1al
 			IfID:        ipsecIfID(c.Name),
 			AddressPool: c.Spec.IPsec.AddressPool,
 		}
-		if previous, exists := ifIDs[p.IfID]; exists {
+		interfaceOwner := "peer:" + c.Name
+		if p.AddressPool != "" {
+			// The pool's return route is shared. Separate interfaces would let
+			// the last peer replace every other client's route to this pool.
+			interfaceOwner = "pool:" + p.AddressPool
+			p.IfID = ipsecIfID(interfaceOwner)
+		}
+		if previous, exists := ifIDs[p.IfID]; exists && previous != interfaceOwner {
 			return nil, fmt.Errorf("IPsec interface ID collision between %s and %s", previous, c.Name)
 		}
-		ifIDs[p.IfID] = c.Name
+		ifIDs[p.IfID] = interfaceOwner
 		if ref := c.Spec.IPsec.Auth.PSKSecretRef; ref != "" {
 			p.RemoteID = c.Spec.IPsec.RemoteIdentity
 			if p.RemoteID == "" {
@@ -1345,6 +1461,9 @@ func (r *VPNGatewayReconciler) readSecretValueBounded(ctx context.Context, ns, n
 }
 
 func ipsecStartAction(spec *sdnv1alpha1.VPNConnectionIPsec) string {
+	if spec.AddressPool != "" {
+		return "none"
+	}
 	if spec.StartAction == sdnv1alpha1.VPNIPsecStartActionNone {
 		return "none"
 	}
@@ -1446,10 +1565,11 @@ write_files:
   permissions: '0600'
   content: |
     VPN_BACKEND=%s
+    VPN_CONFIG_CHECKSUM=%x
 runcmd:
 - [systemctl, enable, --now, cozyplane-vpn-appliance.service]
 - [systemctl, restart, cozyplane-vpn-appliance.service]
-`, base64.StdEncoding.EncodeToString(cfgJSON), backend)
+`, base64.StdEncoding.EncodeToString(cfgJSON), backend, sha256.Sum256(cfgJSON))
 }
 
 // ensureBindings reconciles one VPCBinding per served VPC: each authorizes the
@@ -1458,11 +1578,18 @@ runcmd:
 // controller holds the authority a tenant would not. Bindings for VPCs no
 // longer served are pruned by label (docs/vpn.md §3.3).
 func (r *VPNGatewayReconciler) ensureBindings(ctx context.Context, gw *sdnv1alpha1.VPNGateway,
-	servedVPCs []*sdnv1alpha1.VPC, fwdCIDRs []string) error {
+	servedVPCs []*sdnv1alpha1.VPC, fwdCIDRs []string, clientConns ...[]sdnv1alpha1.VPNConnection) error {
 	keep := map[string]bool{}
 	for i, vpc := range servedVPCs {
 		name := vpnBindingName(gw.Name, vpc.Name, i == 0)
 		keep[name] = true
+		legCIDRs := fwdCIDRs
+		if isWGClientGateway(gw) {
+			if len(clientConns) != 1 {
+				return fmt.Errorf("WireGuard bindings require the complete allocated client snapshot")
+			}
+			legCIDRs = unionRemoteCIDRs(connectionsForVPC(clientConns[0], vpc.Name))
+		}
 		desired := &sdnv1alpha1.VPCBinding{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
@@ -1471,8 +1598,8 @@ func (r *VPNGatewayReconciler) ensureBindings(ctx context.Context, gw *sdnv1alph
 			},
 			Spec: sdnv1alpha1.VPCBindingSpec{
 				VPCRef:          sdnv1alpha1.VPCRef{Namespace: gw.Namespace, Name: vpc.Name},
-				AllowForwarding: len(fwdCIDRs) > 0,
-				ForwardingCIDRs: fwdCIDRs,
+				AllowForwarding: len(legCIDRs) > 0,
+				ForwardingCIDRs: legCIDRs,
 			},
 		}
 		if err := controllerutil.SetControllerReference(gw, desired, r.Scheme); err != nil {
@@ -1893,6 +2020,9 @@ func (r *VPNGatewayReconciler) deployment(gw *sdnv1alpha1.VPNGateway, backend, c
 			{Name: "net.ipv4.ip_forward", Value: "1"},
 			{Name: "net.ipv6.conf.all.forwarding", Value: "1"},
 		}}
+		if backend == backendIPsec || isWGClientGateway(gw) {
+			securityContext.Capabilities.Add = append(securityContext.Capabilities.Add, "BPF")
+		}
 	}
 	containers := []corev1.Container{{
 		Name:            "vpn-gateway",
@@ -1934,6 +2064,9 @@ func (r *VPNGatewayReconciler) deployment(gw *sdnv1alpha1.VPNGateway, backend, c
 			},
 			VolumeMounts: []corev1.VolumeMount{{Name: "config", MountPath: "/etc/cozyplane-vpn", ReadOnly: true}, {Name: "frr-run", MountPath: "/run/frr"}},
 		})
+	}
+	if backend == backendIPsec || isWGClientGateway(gw) {
+		containers[0].Env = append(containers[0].Env, corev1.EnvVar{Name: "VPN_CONFIG_CHECKSUM", Value: checksum})
 	}
 
 	return &appsv1.Deployment{
@@ -2060,6 +2193,7 @@ type applianceResolution struct {
 	IP        string
 	StatusIP  string
 	PodName   string
+	PodUID    types.UID
 	CreatedAt metav1.Time
 }
 
@@ -2104,7 +2238,7 @@ func (r *VPNGatewayReconciler) resolveAppliancePorts(ctx context.Context, gw *sd
 			}
 			out = append(out, applianceResolution{
 				Port: port.Name, IP: port.Spec.IP, StatusIP: pod.Status.PodIP,
-				PodName: port.Spec.PodName, CreatedAt: port.CreationTimestamp,
+				PodName: port.Spec.PodName, PodUID: pod.UID, CreatedAt: port.CreationTimestamp,
 			})
 		}
 	}
@@ -2136,30 +2270,79 @@ func sortApplianceResolutions(out []applianceResolution, stableOrdinal bool) {
 // the caller treats a short result as "not ready" (docs/vpn.md §3.3).
 func (r *VPNGatewayReconciler) resolveVPCLegPorts(ctx context.Context, gw *sdnv1alpha1.VPNGateway,
 	vpc *sdnv1alpha1.VPC, appliances []applianceResolution) []string {
-	var ports sdnv1alpha1.PortList
-	if err := r.List(ctx, &ports, client.MatchingLabels{
-		sdnv1alpha1.LabelVPCNamespace: gw.Namespace,
-		sdnv1alpha1.LabelVPC:          vpc.Name,
-	}); err != nil {
-		return nil
-	}
-	byPod := map[string]string{}
-	for i := range ports.Items {
-		p := &ports.Items[i]
-		if p.Spec.PodNamespace != gw.Namespace || p.Spec.IP == "" {
-			continue
-		}
-		byPod[p.Spec.PodName] = p.Name
-	}
 	var out []string
+	sandboxes := podSandboxSnapshot{}
 	for _, a := range appliances {
-		name, ok := byPod[a.PodName]
-		if !ok {
+		pod := &corev1.Pod{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: a.PodName}, pod); err != nil ||
+			pod.UID != a.PodUID || !pod.DeletionTimestamp.IsZero() || !podReady(pod) || !r.appliancePodOwned(ctx, gw, pod) {
 			return nil
 		}
-		out = append(out, name)
+		sandbox, err := sandboxes.forPod(ctx, r.Client, pod)
+		if err != nil {
+			return nil
+		}
+		var ports sdnv1alpha1.PortList
+		if err := r.List(ctx, &ports, client.MatchingFields{vpnAppliancePodIndex: gw.Namespace + "/" + pod.Name},
+			client.MatchingLabels{sdnv1alpha1.LabelVPCNamespace: gw.Namespace, sdnv1alpha1.LabelVPC: vpc.Name}); err != nil {
+			return nil
+		}
+		var candidates []applianceResolution
+		for i := range ports.Items {
+			port := &ports.Items[i]
+			if port.Spec.PodNamespace == pod.Namespace && port.Spec.PodName == pod.Name &&
+				currentNextHopClaim(port, vpc, pod) && nextHopSandboxMatches(port, sandbox) {
+				candidates = append(candidates, applianceResolution{Port: port.Name, CreatedAt: port.CreationTimestamp})
+			}
+		}
+		if len(candidates) == 0 {
+			return nil
+		}
+		sortApplianceResolutions(candidates, false)
+		out = append(out, candidates[0].Port)
 	}
 	return out
+}
+
+// All running members must acknowledge the same configuration before granting
+// remote sources or publishing usable return routes. Keep endpoint selection
+// independent, so a pending rollout does not recreate its FloatingIP.
+func (r *VPNGatewayReconciler) ipsecConfigApplied(ctx context.Context, gw *sdnv1alpha1.VPNGateway, checksum string) (bool, error) {
+	const podScanBudget = 4096
+	var pods corev1.PodList
+	if err := r.quotaReader().List(ctx, &pods, client.InNamespace(gw.Namespace), client.Limit(podScanBudget+1)); err != nil {
+		return false, err
+	}
+	if pods.Continue != "" || len(pods.Items) > podScanBudget {
+		return false, fmt.Errorf("IPsec ownership scan exceeds budget")
+	}
+	count := 0
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		owned := r.appliancePodOwned(ctx, gw, p)
+		if !owned && p.Labels[vpnGatewayLabel] != gw.Name {
+			continue
+		}
+		if !owned || !p.DeletionTimestamp.IsZero() || !podReady(p) || p.Annotations[vpnConfigChecksumAnnotation] != checksum {
+			return false, nil
+		}
+		count++
+		snapshot, err := r.readApplianceStatus(ctx, p.Status.PodIP, backendIPsec)
+		if err != nil {
+			return false, err
+		}
+		if snapshot.ConfigChecksum != checksum {
+			return false, nil
+		}
+	}
+	expected := 1
+	if mode := haMode(gw); mode == sdnv1alpha1.VPNGatewayHAModeWarmStandby || mode == sdnv1alpha1.VPNGatewayHAModeActiveActive {
+		expected = 2
+	}
+	return count == expected, nil
 }
 
 // readApplianceStatus reads a small, secret-free JSON snapshot directly from
@@ -2329,7 +2512,9 @@ func (r *VPNGatewayReconciler) reflectConnectionStatus(ctx context.Context, conn
 			// A successful observation supersedes the previous value, including
 			// an explicit zero for a connection that has never handshaked.
 			want.LastHandshake = nil
-			want.AssignedAddresses = append([]string(nil), connection.AssignedAddresses...)
+			if c.Spec.WireGuard == nil || c.Spec.WireGuard.Client == nil {
+				want.AssignedAddresses = append([]string(nil), connection.AssignedAddresses...)
+			}
 		}
 		if connection.LastHandshakeUnix > 0 {
 			lastHandshake := metav1.NewTime(time.Unix(connection.LastHandshakeUnix, 0).UTC())
@@ -2341,16 +2526,22 @@ func (r *VPNGatewayReconciler) reflectConnectionStatus(ctx context.Context, conn
 		} else if routesReady {
 			want.Phase = sdnv1alpha1.VPNConnectionPhaseDown
 		}
-		want.Conditions = c.Status.Conditions
+		want.Conditions = slices.Clone(c.Status.Conditions)
+		want.ClientConfig = c.Status.ClientConfig
+		if c.Spec.WireGuard != nil && c.Spec.WireGuard.Client != nil && !routesReady {
+			want.ClientConfig = nil
+			setConnCondition(&want, sdnv1alpha1.VPNConnectionConditionClientConfigured, false,
+				"ConfigurationPending", "waiting for the WireGuard client configuration to be applied")
+		}
 		setConnCondition(&want, sdnv1alpha1.VPNConnectionConditionRoutesProgrammed, routesReady,
 			"RoutesProgrammed", routesMessage(routesReady, len(c.Spec.RemoteCIDRs)))
 		reason, message := connectionStatusReason(routesReady, reported, connection.Up, snapshotErr)
 		setConnCondition(&want, sdnv1alpha1.VPNConnectionConditionEstablished, established, reason, message)
-		if connStatusEqual(c.Status, want) {
-			continue
-		}
 		for j := range want.Conditions {
 			want.Conditions[j].ObservedGeneration = c.Generation
+		}
+		if connStatusEqual(c.Status, want) {
+			continue
 		}
 		c.Status = want
 		if err := r.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) {
@@ -2377,11 +2568,12 @@ func connectionStatusReason(routesReady, reported, up bool, statusErr error) (st
 }
 
 func (r *VPNGatewayReconciler) writeStatus(ctx context.Context, gw *sdnv1alpha1.VPNGateway, status sdnv1alpha1.VPNGatewayStatus) error {
-	if vpnGWStatusEqual(gw.Status, status) {
-		return nil
-	}
+	status.Conditions = slices.Clone(status.Conditions)
 	for i := range status.Conditions {
 		status.Conditions[i].ObservedGeneration = gw.Generation
+	}
+	if vpnGWStatusEqual(gw.Status, status) {
+		return nil
 	}
 	gw.Status = status
 	if err := r.Status().Update(ctx, gw); err != nil {
@@ -2456,7 +2648,7 @@ func vpnGWStatusEqual(a, b sdnv1alpha1.VPNGatewayStatus) bool {
 	}
 	for _, ca := range a.Conditions {
 		cb := meta.FindStatusCondition(b.Conditions, ca.Type)
-		if cb == nil || cb.Status != ca.Status || cb.Reason != ca.Reason || cb.Message != ca.Message {
+		if cb == nil || cb.Status != ca.Status || cb.Reason != ca.Reason || cb.Message != ca.Message || cb.ObservedGeneration != ca.ObservedGeneration {
 			return false
 		}
 	}
@@ -2466,12 +2658,12 @@ func vpnGWStatusEqual(a, b sdnv1alpha1.VPNGatewayStatus) bool {
 func connStatusEqual(a, b sdnv1alpha1.VPNConnectionStatus) bool {
 	if a.Phase != b.Phase || !timePtrEqual(a.LastHandshake, b.LastHandshake) ||
 		!timePtrEqual(a.ObservedAt, b.ObservedAt) || !slices.Equal(a.AssignedAddresses, b.AssignedAddresses) ||
-		len(a.Conditions) != len(b.Conditions) {
+		len(a.Conditions) != len(b.Conditions) || !equality.Semantic.DeepEqual(a.ClientConfig, b.ClientConfig) {
 		return false
 	}
 	for _, ca := range a.Conditions {
 		cb := meta.FindStatusCondition(b.Conditions, ca.Type)
-		if cb == nil || cb.Status != ca.Status || cb.Reason != ca.Reason || cb.Message != ca.Message {
+		if cb == nil || cb.Status != ca.Status || cb.Reason != ca.Reason || cb.Message != ca.Message || cb.ObservedGeneration != ca.ObservedGeneration {
 			return false
 		}
 	}

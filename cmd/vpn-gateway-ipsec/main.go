@@ -31,12 +31,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/lllamnyp/cozyplane/internal/httpserver"
 	"log/slog"
 	"math"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"sort"
@@ -49,7 +51,9 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"github.com/lllamnyp/cozyplane/internal/vpnidentity"
+	"github.com/lllamnyp/cozyplane/internal/vpnipsecfilter"
 	"github.com/lllamnyp/cozyplane/internal/vpnlimits"
+	"github.com/lllamnyp/cozyplane/internal/vpnmetrics"
 	"github.com/lllamnyp/cozyplane/internal/vpnnet"
 	"github.com/lllamnyp/cozyplane/internal/vpnstatus"
 )
@@ -62,6 +66,7 @@ const (
 // config is the mounted tunnel description. It carries PSKs, so it is delivered
 // as a Secret, never a ConfigMap.
 type config struct {
+	LocalID     string          `json:"localIdentity,omitempty"`
 	MTU         int             `json:"mtu,omitempty"`
 	Credentials *ikeCredentials `json:"credentials,omitempty"`
 	Pools       []addressPool   `json:"pools,omitempty"`
@@ -87,6 +92,7 @@ type peer struct {
 	StartAction string   `json:"startAction,omitempty"` // "start" initiates; "none" is responder-only
 	PSK         string   `json:"psk,omitempty"`
 	RemoteCIDRs []string `json:"remoteCIDRs"`
+	LocalCIDRs  []string `json:"localCIDRs"`
 	Proposals   []string `json:"proposals,omitempty"`
 	DPDDelay    int      `json:"dpdDelay,omitempty"`
 	IfID        uint32   `json:"ifId"` // the xfrm if_id binding SA ⇄ ipsec<ifId> interface
@@ -96,6 +102,7 @@ type peer struct {
 	EAPPassword string   `json:"eapPassword,omitempty"`
 	AddressPool string   `json:"addressPool,omitempty"`
 	LocalID     string   `json:"localIdentity,omitempty"`
+	poolCIDR    string
 }
 
 func main() {
@@ -111,10 +118,23 @@ func main() {
 }
 
 func run(path string, log *slog.Logger) error {
+	// A container restart keeps its pod network namespace. Revoke the previous
+	// process' dataplane before even reading its replacement Secret.
+	if err := closePreviousXfrm(); err != nil {
+		return fmt.Errorf("close previous IPsec dataplane: %w", err)
+	}
+	defer func() {
+		if err := closePreviousXfrm(); err != nil {
+			log.Error("close IPsec dataplane", "err", err)
+		}
+	}()
 	// #nosec G304 G703 -- VPN_CONFIG is an operator-set environment path to the controller-mounted Secret; tenant requests cannot select this path.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read config %q: %w", path, err)
+	}
+	if err := checkExpectedConfig(raw, os.Getenv("VPN_CONFIG_CHECKSUM")); err != nil {
+		return err
 	}
 	var cfg config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -135,6 +155,28 @@ func run(path string, log *slog.Logger) error {
 		if problem := vpnlimits.IPsecPoolNameProblem(pool.Name, true); problem != "" {
 			return fmt.Errorf("%s", problem)
 		}
+	}
+	if problem := vpnlimits.IPsecScalarProblem("", cfg.LocalID); problem != "" {
+		return fmt.Errorf("%s", problem)
+	}
+	configured, err := configuredPeers(cfg)
+	if err != nil {
+		return err
+	}
+	cfg.Peers = configured
+	for _, p := range cfg.Peers {
+		if err := validatePeerSelectors(p); err != nil {
+			return err
+		}
+	}
+	xfrmPeers, err := groupXfrmPeers(cfg.Peers)
+	if err != nil {
+		return err
+	}
+	// Forwarding remains enabled across container restarts. Protect accepted
+	// destinations before waiting for IKE/VICI, including a fresh namespace.
+	if err := protectRemotePrefixes(xfrmPeers); err != nil {
+		return err
 	}
 
 	if err := vpnnet.EnsureForwarding(); err != nil {
@@ -182,16 +224,15 @@ func run(path string, log *slog.Logger) error {
 			}
 		}
 
-		for _, p := range cfg.Peers {
-			if cfg.Credentials != nil {
-				p.LocalID = cfg.Credentials.LocalID
-			}
+		for _, p := range xfrmPeers {
 			// The xfrm-interface the decrypted traffic lands on. Fatal on failure:
 			// support was preflighted above, so a per-peer failure here is a real
 			// error (a bad if_id/CIDR), not the kernel-capability gate.
-			if err := ensureXfrm(p.IfID, p.RemoteCIDRs, cfg.MTU); err != nil {
+			if err := ensureXfrm(p.IfID, p.RemoteCIDRs, p.LocalCIDRs, cfg.MTU); err != nil {
 				return fmt.Errorf("peer %q xfrm interface: %w", p.Name, err)
 			}
+		}
+		for _, p := range cfg.Peers {
 			if err := loadPeer(requester, p); err != nil {
 				return fmt.Errorf("load peer %q: %w", p.Name, err)
 			}
@@ -200,7 +241,16 @@ func run(path string, log *slog.Logger) error {
 		}
 		log.Info("ipsec tunnels configured", "peers", len(cfg.Peers))
 		return nil
-	}, func(ctx context.Context) { serveIPsecMetrics(ctx, cfg.Peers, log) })
+	}, func(ctx context.Context) { serveIPsecMetrics(ctx, cfg.Peers, log, configChecksum(raw)) })
+}
+
+func configChecksum(raw []byte) string { return fmt.Sprintf("%x", sha256.Sum256(raw)) }
+
+func checkExpectedConfig(raw []byte, expected string) error {
+	if expected != "" && expected != configChecksum(raw) {
+		return fmt.Errorf("mounted VPN config does not match expected checksum")
+	}
+	return nil
 }
 
 func validatePeerIdentities(peers []peer) error {
@@ -242,8 +292,17 @@ type ipsecConnectionMetrics struct {
 // serveIPsecMetrics exposes one series per configured VPNConnection. Each
 // scrape reads live IKE/CHILD SA state over VICI, so rekeys and failures are
 // reflected without a separate cache or polling loop.
-func serveIPsecMetrics(ctx context.Context, peers []peer, log *slog.Logger) {
+func serveIPsecMetrics(ctx context.Context, peers []peer, log *slog.Logger, checksum string) {
 	collector := &ipsecCollector{slot: make(chan struct{}, 1), open: func(ctx context.Context) (ipsecStream, error) { return openMetricsVICI(ctx, viciSocket) }}
+	srv := httpserver.New(metricsAddr, ipsecMetricsHandler(collector, peers, log, checksum, readXfrmErrors))
+	stop := context.AfterFunc(ctx, func() { _ = srv.Close() })
+	defer stop()
+	if err := srv.ListenAndServe(); err != nil {
+		log.Error("metrics server stopped", "err", err)
+	}
+}
+
+func ipsecMetricsHandler(collector *ipsecCollector, peers []peer, log *slog.Logger, checksum string, readErrors func() (map[string]uint64, error)) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		metrics, _, err := collector.collect(r.Context(), peers)
@@ -252,7 +311,8 @@ func serveIPsecMetrics(ctx context.Context, peers []peer, log *slog.Logger) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = w.Write([]byte(formatIPsecMetrics(metrics)))
+		counters, counterErr := readErrors()
+		_, _ = w.Write([]byte(formatIPsecMetrics(metrics) + formatXfrmErrors(counters, counterErr)))
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		metrics, observedAt, err := collector.collect(r.Context(), peers)
@@ -261,9 +321,10 @@ func serveIPsecMetrics(ctx context.Context, peers []peer, log *slog.Logger) {
 			return
 		}
 		snapshot := vpnstatus.Snapshot{
-			Backend:     "ipsec",
-			ObservedAt:  observedAt,
-			Connections: make(map[string]vpnstatus.Connection, len(metrics)),
+			ConfigChecksum: checksum,
+			Backend:        "ipsec",
+			ObservedAt:     observedAt,
+			Connections:    make(map[string]vpnstatus.Connection, len(metrics)),
 		}
 		for name, m := range metrics {
 			snapshot.Connections[name] = vpnstatus.Connection{
@@ -288,12 +349,7 @@ func serveIPsecMetrics(ctx context.Context, peers []peer, log *slog.Logger) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httpserver.New(metricsAddr, mux)
-	stop := context.AfterFunc(ctx, func() { _ = srv.Close() })
-	defer stop()
-	if err := srv.ListenAndServe(); err != nil {
-		log.Error("metrics server stopped", "err", err)
-	}
+	return mux
 }
 
 func collectIPsecMetrics(events []*vici.Message, peers []peer, now time.Time) map[string]ipsecConnectionMetrics {
@@ -349,6 +405,9 @@ func collectIPsecMetrics(events []*vici.Message, peers []peer, now time.Time) ma
 }
 
 func messageString(m *vici.Message, key string) string {
+	if m == nil {
+		return ""
+	}
 	v, _ := m.Get(key).(string)
 	return v
 }
@@ -382,64 +441,47 @@ func appendUniqueStrings(dst []string, values ...string) []string {
 }
 
 func formatIPsecMetrics(metrics map[string]ipsecConnectionMetrics) string {
-	names := make([]string, 0, len(metrics))
-	for name := range metrics {
-		names = append(names, name)
+	connections := make(map[string]vpnstatus.Connection, len(metrics))
+	for name, m := range metrics {
+		connections[name] = vpnstatus.Connection{
+			Up: m.Up == 1, LastHandshakeUnix: m.LastHandshakeSec,
+			RXBytes: m.RXBytes, TXBytes: m.TXBytes,
+			RXPackets: m.RXPackets, TXPackets: m.TXPackets,
+		}
 	}
-	sort.Strings(names)
-	var b strings.Builder
-	b.WriteString("# HELP cozyplane_vpn_connection_rx_bytes_total Bytes received from the peer over the tunnel.\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_rx_bytes_total counter\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_rx_bytes_total{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].RXBytes)
-	}
-	b.WriteString("# HELP cozyplane_vpn_connection_tx_bytes_total Bytes sent to the peer over the tunnel.\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_tx_bytes_total counter\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_tx_bytes_total{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].TXBytes)
-	}
-	b.WriteString("# HELP cozyplane_vpn_connection_rx_packets_total Packets received from the peer over the tunnel.\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_rx_packets_total counter\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_rx_packets_total{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].RXPackets)
-	}
-	b.WriteString("# HELP cozyplane_vpn_connection_tx_packets_total Packets sent to the peer over the tunnel.\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_tx_packets_total counter\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_tx_packets_total{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].TXPackets)
-	}
-	b.WriteString("# HELP cozyplane_vpn_connection_up Whether at least one CHILD_SA is installed for the connection.\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_up gauge\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_up{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].Up)
-	}
-	b.WriteString("# HELP cozyplane_vpn_connection_last_handshake_timestamp_seconds Unix time of the latest established IKE SA (0 if none).\n")
-	b.WriteString("# TYPE cozyplane_vpn_connection_last_handshake_timestamp_seconds gauge\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "cozyplane_vpn_connection_last_handshake_timestamp_seconds{connection=%q,backend=\"ipsec\"} %d\n", name, metrics[name].LastHandshakeSec)
-	}
-	return b.String()
+	return vpnmetrics.Format("ipsec", connections, true)
 }
 
 // probeXfrmSupport reports whether the kernel supports xfrm-interfaces, by
 // creating and deleting a throwaway one. A kernel without CONFIG_XFRM_INTERFACE
 // rejects LinkAdd with "operation not supported" / "unknown device type".
-func probeXfrmSupport() error {
-	const probe = "cpxfrmprobe"
-	link := &netlink.Xfrmi{LinkAttrs: netlink.LinkAttrs{Name: probe}, Ifid: 0x0cb1}
+func probeXfrmSupport() (result error) {
+	if err := closeXfrmProbe(); err != nil {
+		return err
+	}
+	link := &netlink.Xfrmi{LinkAttrs: netlink.LinkAttrs{Name: xfrmProbeName}, Ifid: xfrmProbeID}
 	if err := netlink.LinkAdd(link); err != nil {
 		return err
 	}
-	if l, e := netlink.LinkByName(probe); e == nil {
-		_ = netlink.LinkDel(l)
+	dev, err := netlink.LinkByName(xfrmProbeName)
+	if err != nil {
+		return err
 	}
-	return nil
+	defer func() {
+		if err := netlink.LinkDel(dev); err != nil {
+			result = fmt.Errorf("remove XFRM probe: %w", err)
+		}
+	}()
+	return netlink.LinkSetAlias(dev, xfrmProbeAlias)
 }
 
 // ensureXfrm creates (idempotently) the xfrm-interface ipsec<ifId> bound to
 // if_id, brings it up, and routes each remote CIDR to it. charon installs no
 // routes (install_routes=no); these are what steer traffic into the SA.
-func ensureXfrm(ifID uint32, remoteCIDRs []string, mtu int) error {
+func ensureXfrm(ifID uint32, remoteCIDRs, localCIDRs []string, mtu int) error {
+	if ifID == 0 {
+		return fmt.Errorf("IPsec if_id must be nonzero")
+	}
 	name := fmt.Sprintf("ipsec%d", ifID)
 	link := &netlink.Xfrmi{
 		LinkAttrs: netlink.LinkAttrs{Name: name},
@@ -454,10 +496,26 @@ func ensureXfrm(ifID uint32, remoteCIDRs []string, mtu int) error {
 	if err != nil {
 		return fmt.Errorf("find %s: %w", name, err)
 	}
+	if err := validateXfrmDevice(dev, ifID); err != nil {
+		return err
+	}
+	if err := netlink.LinkSetAlias(dev, xfrmDeviceAlias); err != nil {
+		return fmt.Errorf("mark XFRM interface: %w", err)
+	}
+	if err := netlink.LinkSetDown(dev); err != nil {
+		return err
+	}
+	dev, err = netlink.LinkByName(name)
+	if err != nil {
+		return err
+	}
 	if mtu > 0 {
 		if err := netlink.LinkSetMTU(dev, mtu); err != nil {
 			return fmt.Errorf("set %s MTU to %d: %w", name, mtu, err)
 		}
+	}
+	if err := vpnipsecfilter.Install(dev, localCIDRs); err != nil {
+		return err
 	}
 	if err := netlink.LinkSetUp(dev); err != nil {
 		return fmt.Errorf("set %s up: %w", name, err)
@@ -589,8 +647,10 @@ func sendVICIMessage(sess viciRequester, command string, req *vici.Message) erro
 	if err != nil {
 		return err
 	}
-	if success := messageString(resp, "success"); success != "" && success != "yes" {
-		return fmt.Errorf("%s failed: %s", command, messageString(resp, "errmsg"))
+	if messageString(resp, "success") != "yes" {
+		// VICI diagnostics may contain credential material supplied by the
+		// request. Do not echo them into the pod logs.
+		return fmt.Errorf("%s was not acknowledged by charon", command)
 	}
 	return nil
 }
@@ -600,6 +660,9 @@ func sendVICIMessage(sess viciRequester, command string, req *vici.Message) erro
 // peer to its authorized prefixes (or its individually assigned pool address).
 func loadPeer(sess viciRequester, p peer) error {
 	if err := validatePeerBudget(p); err != nil {
+		return err
+	}
+	if err := validatePeerSelectors(p); err != nil {
 		return err
 	}
 	identity := p.RemoteID
@@ -634,7 +697,7 @@ func loadPeer(sess viciRequester, p peer) error {
 	ifID := strconv.FormatUint(uint64(p.IfID), 10)
 	startAction := ipsecStartAction(p)
 	child := viciChild{
-		LocalTS:      []string{"0.0.0.0/0", "::/0"},
+		LocalTS:      append([]string(nil), p.LocalCIDRs...),
 		RemoteTS:     append([]string(nil), p.RemoteCIDRs...),
 		IfIDIn:       ifID,
 		IfIDOut:      ifID,
@@ -644,9 +707,18 @@ func loadPeer(sess viciRequester, p peer) error {
 	}
 	if p.AddressPool != "" {
 		child.RemoteTS = []string{"dynamic"}
+		for _, cidr := range p.RemoteCIDRs {
+			prefix, _ := netip.ParsePrefix(cidr)
+			if prefix.Masked().String() != p.poolCIDR {
+				child.RemoteTS = append(child.RemoteTS, cidr)
+			}
+		}
 	}
 	if len(child.RemoteTS) == 0 {
 		return fmt.Errorf("IPsec peer %s has no authorized remote traffic selectors", p.Name)
+	}
+	if len(child.LocalTS) == 0 {
+		return fmt.Errorf("IPsec peer %s has no authorized local traffic selectors", p.Name)
 	}
 	if p.DPDDelay > 0 {
 		child.DPDAction = "restart"
@@ -661,7 +733,9 @@ func loadPeer(sess viciRequester, p peer) error {
 		remoteEnd = viciEnd{Auth: "pubkey", ID: p.RemoteID}
 	case "eap":
 		localEnd = viciEnd{Auth: "pubkey", ID: p.LocalID}
-		remoteEnd = viciEnd{Auth: "eap-dynamic", EAPID: p.EAPIdentity}
+		// Debian ships MSCHAPv2, not the optional eap-dynamic plugin. Charon
+		// 6.0.1 does not select profiles by eap_id, so bind the IKE identity too.
+		remoteEnd = viciEnd{Auth: "eap-mschapv2", ID: p.EAPIdentity, EAPID: p.EAPIdentity}
 	}
 	conn := viciConn{
 		Version:   2, // IKEv2
@@ -706,6 +780,39 @@ func validatePeerBudget(p peer) error {
 	}
 	if problem := vpnlimits.IPsecProposalProblem(p.Proposals); problem != "" {
 		return fmt.Errorf("%s", problem)
+	}
+	return nil
+}
+
+func validatePeerSelectors(p peer) error {
+	if p.AddressPool != "" && p.AuthMode != "certificate" && p.AuthMode != "eap" {
+		return fmt.Errorf("IPsec address pools require certificate or EAP authentication")
+	}
+	if p.AuthMode == "eap" && p.AddressPool == "" {
+		return fmt.Errorf("IPsec EAP authentication requires an address pool")
+	}
+	if p.AddressPool != "" && p.poolCIDR == "" {
+		return fmt.Errorf("IPsec pool selector was not resolved")
+	}
+	if len(p.LocalCIDRs) == 0 || len(p.LocalCIDRs) > vpnlimits.RoutePrefixes || len(p.RemoteCIDRs) > vpnlimits.RoutePrefixes {
+		return fmt.Errorf("IPsec traffic selector capacity exceeded")
+	}
+	if p.AddressPool == "" && len(p.RemoteCIDRs) == 0 {
+		return fmt.Errorf("IPsec peer has no authorized remote traffic selectors")
+	}
+	for _, cidrs := range [][]string{p.LocalCIDRs, p.RemoteCIDRs} {
+		for _, raw := range cidrs {
+			if len(raw) > vpnlimits.RoutePrefixBytes {
+				return fmt.Errorf("IPsec traffic selector exceeds size budget")
+			}
+			prefix, err := netip.ParsePrefix(raw)
+			if err != nil || prefix.Addr().Is4In6() || !prefix.Addr().IsGlobalUnicast() || prefix.Bits() == 0 {
+				return fmt.Errorf("IPsec traffic selector must be a unicast prefix")
+			}
+		}
+	}
+	if p.AuthMode != "" && p.AuthMode != "psk" && p.AuthMode != "certificate" && p.AuthMode != "eap" {
+		return fmt.Errorf("unsupported IPsec authentication mode")
 	}
 	return nil
 }

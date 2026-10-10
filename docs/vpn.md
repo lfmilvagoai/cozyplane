@@ -554,6 +554,101 @@ applies.
 
 ### 3.4 Roadwarrior
 
+#### WireGuard workstation access
+
+WireGuard client gateways declare `spec.wireguard.addressPools` (named CIDRs,
+optional DNS) and serve one VPC plus optional `additionalVPCRefs`. They are
+dedicated to workstations, in single-appliance or WarmStandby mode. Each
+`VPNConnection` supplies a workstation public key and `wireguard.client` with
+selected `addressPools` and explicit `vpcRefs` among the gateway's served VPCs.
+The private workstation key never reaches cozyplane. Site-to-site and IPsec
+contracts remain unchanged.
+
+The controller reserves stable host addresses by connection UID in bounded,
+optimistically locked namespace state. Server peer AllowedIPs contain only the
+assigned /32 or /128. Routes and scoped forwarding grants are computed separately
+for each authorized VPC. The client configuration status contains only public
+parameters and assigned addresses remain available while the workstation is
+offline. A netns-local eBPF ingress filter on `wg0` enforces destination grants
+even if the workstation modifies its own routes, rejecting inter-client,
+internet, management and appliance-local traffic. The filter must be installed
+before the tunnel serves traffic.
+
+Deleting or changing a client rolls the immutable appliance configuration.
+Applied configuration checksums witness revocation across every owned appliance;
+addresses are not reused until predecessor peers are removed. Finalizers keep
+this cleanup recoverable. Persisted Pod and Port UID witnesses also fence
+force-deleted appliance Pod objects: an old Port must complete the existing
+node sever acknowledgement before its client's address can be reused.
+Pool/gateway choices are immutable on client
+connections; keys and authorized VPC lists may change. Client gateways reject
+ActiveActive, LiveMigration and site-to-site peers.
+
+For example, after creating the VPCs, declare a dedicated gateway and a client
+in the same namespace. Replace `CLIENT_PUBLIC_KEY_BASE64` with the public key
+generated on the workstation and choose a pool outside cluster, served VPC and
+other VPN address spaces:
+
+```yaml
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPNGateway
+metadata:
+  name: workstation-access
+spec:
+  vpcRef: {name: app}
+  additionalVPCRefs: [{name: data}]
+  wireguard:
+    addressPools:
+    - name: workstations-v4
+      cidr: 172.30.80.0/24
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPNConnection
+metadata:
+  name: workstation-001
+spec:
+  gatewayRef: {name: workstation-access}
+  wireguard:
+    peerPublicKey: CLIENT_PUBLIC_KEY_BASE64
+    client:
+      addressPools: [workstations-v4]
+      vpcRefs: [{name: app}, {name: data}]
+```
+
+Wait for `ClientConfigured=True` with `observedGeneration` matching the current
+connection generation. `status.assignedAddresses` supplies interface addresses
+(use /32 or /128); `status.clientConfig` supplies the server public key,
+endpoint, permitted destination CIDRs (`allowedIPs`), optional DNS, MTU and
+persistent keepalive. Combine those public parameters with the workstation's
+locally retained private key in a standard WireGuard profile. No private key is
+returned by the API. `ClientConfigured` describes installed configuration;
+`Established` describes an observed handshake and can be false while offline.
+Client gateways use a concrete 1280-byte tunnel MTU when the primary VPC leaves
+MTU unset. An explicit primary VPC MTU reserves 80 bytes for WireGuard outer
+encapsulation, bounded by any smaller additional VPC leg MTU. IPv6 allocations
+are refused if the resulting tunnel MTU is below 1280; configure the VPC MTU
+explicitly when using a custom smaller underlay.
+
+The reservation Secret is controller state and must not be deleted to reset
+leases. Interrupted cleanup retains reservations, including during API read or
+write failures. On unreadable allocation state the controller attempts to
+withdraw the owned VPC bindings and public client configuration while retaining
+workloads and leases for a later complete ownership scan. API failures can
+delay acknowledgement of withdrawal; they never authorize lease reuse.
+Conflicting declared WireGuard and IPsec pools are detected
+during reconciliation; admission across the two backends is not atomic.
+
+The backend has been implemented and exercised locally on Docker Desktop:
+real Linux WireGuard peers, multiple VPCs, IPv4/IPv6, concurrent clients,
+controlled packet loss, latency, MTU, load, revocation and adversarial access
+attempts. A temporary native Windows WireGuard profile also reached a VPC
+application after elevation to install its tunnel service. Local WarmStandby
+recovery was observed with an approximately 17-second application interruption.
+The reproducible commands, measurements and limitations are recorded in
+[`test/wireguard-client-validation.md`](../test/wireguard-client-validation.md).
+Real-cluster validation remains outstanding; local throughput is not a
+production performance guarantee.
+
 Individual IKEv2 clients reuse `VPNConnection`; no second lease controller or
 shadow identity API is introduced. An IPsec gateway declares non-overlapping,
 named address pools and an optional cert-manager-compatible TLS Secret:
@@ -585,6 +680,12 @@ spec:
         secretRef: device-001-eap # data.password
 ```
 
+EAP uses MSCHAPv2 with the gateway authenticated by its certificate. The client
+must send the configured EAP identity as its IKE identity too: the packaged
+strongSwan 6.0.1 selects the per-client profile by that exact IKE identity.
+Clients using different IKE and EAP identities are unsupported by this image.
+Native Windows interoperability has not been qualified by the local tests.
+
 The controller reads referenced Secrets, projects credentials only into the
 appliance's config Secret, and adds the selected pool CIDR to the scoped
 forwarding grant and VPC route table. The appliance loads certificates, keys,
@@ -592,6 +693,13 @@ EAP secrets and pools directly over VICI. strongSwan owns online/offline leases;
 the live status reports assigned virtual IPs. Deleting the connection removes
 the credential and connection on the next immutable-config rollout, which is
 the revocation boundary. Secret contents never enter API status or metrics.
+
+IPsec client address pools cannot use `ha.mode: ActiveActive`: independent
+strongSwan instances do not coordinate leases and may assign the same client
+address to different authenticated peers. Admission and controller preflight
+reject this combination. Single appliances, WarmStandby and LiveMigration
+retain pool support; ActiveActive remains available for site-to-site IPsec
+connections without address pools.
 
 ### 3.5 High availability — a three-tier stack, not one switch
 
@@ -744,6 +852,44 @@ Two layers, cleanly split:
   installs a cross-namespace `VMPodScrape` selecting only
   `app=cozyplane-vpn-gateway`. The datapath never learns what a "connection" is.
 
+The monitoring contract includes zero-valued series for configured peers without
+a live tunnel, and `cozyplane_vpn_gateway_connections{backend}` counts configured
+connections even when there are none. WireGuard exposes bytes, state and handshake
+time; its API does not supply per-peer packet totals or application loss/latency.
+IPsec additionally exposes packets and namespace-local kernel XFRM error counters
+as `cozyplane_vpn_ipsec_xfrm_errors_total{reason}`. Its separate
+`cozyplane_vpn_ipsec_xfrm_collection_success` reports a missing/unreadable kernel
+statistics source without hiding that telemetry failure behind zero errors.
+
+Scrape discovery sets a stable `job="cozyplane-vpn-gateways"`, plus namespace,
+gateway and pod. Dashboard and connection rules aggregate explicitly by cluster,
+namespace, gateway, connection and backend, removing instance/job/replica labels
+so a healthy HA peer prevents a false connection-down alert. A WireGuard stale
+handshake is meaningful; an old IKE establishment timestamp on an installed
+IPsec CHILD SA is normal and must not trigger that alert.
+
+Scrape failures have their own alert. Missing targets are checked against
+`kube_pod_container_info{container="vpn-gateway"}` from kube-state-metrics,
+excluding terminating pods. This inventory is required to detect a pod that
+was never discovered; `up` alone cannot report a nonexistent target. Restarts
+also require kube-state-metrics, and CPU/memory panels require kubelet/cAdvisor.
+The chart supplies discovery/rules/dashboard resources, not these external
+exporters: VMAgent and VMAlert namespace/label selectors must select the chart's
+resources. Custom selector labels can be supplied on each monitoring resource.
+CRD presence alone does not prove a scraper or alert evaluator selected it.
+Missing families, missing Kubernetes inventory/restart counters and missing
+CPU/memory counters have dedicated alerts; an empty gateway is a valid zero,
+not missing telemetry. The Grafana dashboard defines its Prometheus datasource
+variable and exposes scrape health, configured peers, XFRM collection/errors,
+CPU, memory and restarts. Resource panels join on cluster/namespace/pod and carry
+the gateway label from appliance metrics rather than assuming kube-state-metrics
+exports that custom label. External exporters must use the same cluster label.
+The `up` tunnel metric describes crypto state, not application reachability;
+workload latency/loss or an end-to-end service SLO requires separate probes.
+Grafana in another namespace requires the dashboard's
+`allowCrossNamespaceImport` setting plus the intended `instanceSelector`.
+Local verification and reproduction are in `test/vpn-monitoring-validation.md`.
+
 ## 7. MTU
 
 TCP SYNs entering a VPN route or Geneve north-south path have an advertised MSS
@@ -777,6 +923,19 @@ loaded. The validated cluster image builds it in (`=y`). The appliance still
 fails closed and loud when the runtime capability is unavailable (§10.3). No
 policy-based fallback is shipped because it would pull ESP policy into the
 datapath, which the route-based design exists to avoid.
+
+IPsec appliance nodes and VMs also need the upstream XFRM IPv6 device-reference
+fix `136992de9bb91871084ae52d172610541c76e4d2` (or its vendor backport).
+Debian records it as [CVE-2026-64580](https://security-tracker.debian.org/tracker/CVE-2026-64580),
+fixed for its Bookworm `linux-6.12` packages from `6.12.101-1~deb12u1`.
+The local test VM on `6.12.95` encountered a negative XFRM device reference
+count that blocked interface deletion after traffic; this matches the upstream
+failure description, without proving the initial error path. Crypto state and
+forwarding were already revoked, but Kubernetes could not finish terminating
+the pod. The subsequent tests use Debian Security kernel `6.12.111-1~deb12u1`.
+See [the local validation report](../test/ipsec-validation.md) for separate
+kernel environments and the observed cleanup results. Enabling
+`CONFIG_XFRM_INTERFACE` alone does not establish lifecycle compatibility.
 
 ## 8. Testing
 
@@ -1075,6 +1234,36 @@ Duplicate remote identities are compared by parsed type and canonical spelling
 for IP, FQDN and email identities, including strongSwan's `@`/`@@` and textual
 type-prefix aliases. Case or equivalent IP spelling cannot give two connections
 different authorization rules for the same authenticated identity.
+
+Extended local validation also checks the restart and authorization boundary.
+The controller projects the gateway's local IKE identity independently of TLS
+credentials and restricts each peer's local traffic selectors to the served
+VPC prefixes. A persistent ingress TC filter on each managed XFRM interface
+rejects appliance-local destinations; source authorization remains with the
+authenticated XFRM remote selectors. No netfilter or policy routing is added.
+Peers selecting the same address pool share one stable XFRM interface ID and
+return route. Their independently authenticated CHILD SAs retain distinct
+assigned-address selectors; otherwise the last peer's pool route would replace
+the earlier peers' return path. Site-to-site peers retain independent interfaces.
+Pooled certificate/EAP peers remain responder-only, including legacy defaults.
+
+Before reading replacement configuration, the appliance closes predecessor
+XFRM interfaces and removes their associated kernel policies/SAs. It first
+replaces their managed remote-prefix routes with main-table blackholes; deleting
+or closing a tunnel must not send its traffic through the cleartext fabric
+default route. Fresh configuration protects its remote prefixes before enabling
+forwarding or waiting for charon, and installed XFRM routes replace matching
+blackholes only after the ingress filter is attached. Invalid or stale projected
+configuration leaves tunnels closed and accepted prefixes protected. The
+throwaway kernel-support probe also recovers an interrupted predecessor probe
+only when its exact name, XFRM interface ID and ownership marker match; foreign
+devices are preserved. Managed pods
+receive the expected configuration checksum, and runtime status reports the
+checksum only after selectors, filters and routes have been installed. The
+controller waits for current configuration before publishing usable routes or
+Established status. IPsec spec changes increment API generation; metadata and
+status changes preserve it. These safeguards are subject to the extended local
+kernel/product tests; real-cluster validation remains separately tracked.
 
 Certificate distinguished names use comma-separated named attributes, at most
 20 nonempty components. Attribute aliases, surrounding component spaces and

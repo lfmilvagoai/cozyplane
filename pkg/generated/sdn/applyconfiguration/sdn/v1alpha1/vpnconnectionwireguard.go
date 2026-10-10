@@ -23,6 +23,9 @@ package v1alpha1
 //
 // VPNConnectionWireGuard configures a WireGuard peer.
 type VPNConnectionWireGuardApplyConfiguration struct {
+	// Client selects managed workstation access instead of site-to-site routes.
+	// The workstation creates and retains its private key.
+	Client *VPNWireGuardClientApplyConfiguration `json:"client,omitempty"`
 	// PeerPublicKey is the remote peer's WireGuard public key for a single
 	// tunnel. It is mutually exclusive with PeerPublicKeys.
 	PeerPublicKey *string `json:"peerPublicKey,omitempty"`
@@ -46,6 +49,14 @@ type VPNConnectionWireGuardApplyConfiguration struct {
 // apply.
 func VPNConnectionWireGuard() *VPNConnectionWireGuardApplyConfiguration {
 	return &VPNConnectionWireGuardApplyConfiguration{}
+}
+
+// WithClient sets the Client field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Client field is set to the value of the last call.
+func (b *VPNConnectionWireGuardApplyConfiguration) WithClient(value *VPNWireGuardClientApplyConfiguration) *VPNConnectionWireGuardApplyConfiguration {
+	b.Client = value
+	return b
 }
 
 // WithPeerPublicKey sets the PeerPublicKey field in the declarative configuration to the given value

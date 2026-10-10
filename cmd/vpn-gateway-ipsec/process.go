@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/strongswan/govici/vici"
@@ -17,6 +18,10 @@ func superviseCharon(parent context.Context, argv []string, initialize func(cont
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(context.Canceled)
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Give charon a bounded opportunity to delete its kernel SAs on shutdown.
+	// Startup cleanup remains mandatory because SIGKILL/OOM bypass this path.
+	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
+	command.WaitDelay = 3 * time.Second
 	command.Stdout, command.Stderr = os.Stderr, os.Stderr
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start charon: %w", err)

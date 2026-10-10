@@ -55,6 +55,9 @@ const (
 	// VPNConnectionConditionRoutesProgrammed is True when the connection's
 	// remote CIDRs are routed toward its gateway.
 	VPNConnectionConditionRoutesProgrammed = "RoutesProgrammed"
+	// VPNConnectionConditionClientConfigured is True when the current client
+	// parameters have been applied to the appliance, independently of handshakes.
+	VPNConnectionConditionClientConfigured = "ClientConfigured"
 )
 
 // LocalVPNGatewayRef references a VPNGateway in the same namespace.
@@ -65,6 +68,10 @@ type LocalVPNGatewayRef struct {
 
 // VPNConnectionWireGuard configures a WireGuard peer.
 type VPNConnectionWireGuard struct {
+	// Client selects managed workstation access instead of site-to-site routes.
+	// The workstation creates and retains its private key.
+	// +optional
+	Client *VPNWireGuardClient `json:"client,omitempty"`
 	// PeerPublicKey is the remote peer's WireGuard public key for a single
 	// tunnel. It is mutually exclusive with PeerPublicKeys.
 	// +optional
@@ -95,6 +102,36 @@ type VPNConnectionWireGuard struct {
 	// PersistentKeepalive is the keepalive interval in seconds; zero disables it.
 	// +optional
 	PersistentKeepalive int32 `json:"persistentKeepalive,omitempty"`
+}
+
+// VPNWireGuardClient selects pools and explicit same-namespace VPC permissions.
+type VPNWireGuardClient struct {
+	// AddressPools select at most one pool per IP family from the gateway.
+	// Immutable after creation.
+	// +listType=atomic
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=2
+	AddressPools []string `json:"addressPools"`
+	// VPCRefs identify the permitted VPCs among those served by the gateway.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	VPCRefs []LocalVPCRef `json:"vpcRefs"`
+}
+
+// VPNWireGuardClientConfig contains public parameters for a workstation client.
+// No private key or preshared key is exposed here.
+type VPNWireGuardClientConfig struct {
+	Endpoint        string `json:"endpoint"`
+	ServerPublicKey string `json:"serverPublicKey"`
+	// +listType=atomic
+	AllowedIPs []string `json:"allowedIPs"`
+	// +optional
+	// +listType=atomic
+	DNS                 []string `json:"dns,omitempty"`
+	MTU                 int32    `json:"mtu"`
+	PersistentKeepalive int32    `json:"persistentKeepalive"`
 }
 
 // VPNIPsecCertificateAuth identifies a certificate-authenticated remote peer.
@@ -181,7 +218,8 @@ type VPNConnectionSpec struct {
 	// into the VPC toward the gateway and admitted as the gateway's scoped
 	// forwarding sources.
 	// +listType=atomic
-	RemoteCIDRs []string `json:"remoteCIDRs"`
+	// +optional
+	RemoteCIDRs []string `json:"remoteCIDRs,omitempty"`
 
 	// WireGuard configures the peer. Exactly one tunnel backend is set, and it
 	// must match the gateway's backend.
@@ -213,6 +251,10 @@ type VPNConnectionStatus struct {
 	// +optional
 	// +listType=atomic
 	AssignedAddresses []string `json:"assignedAddresses,omitempty"`
+
+	// ClientConfig is published only after the current configuration is applied.
+	// +optional
+	ClientConfig *VPNWireGuardClientConfig `json:"clientConfig,omitempty"`
 
 	// Conditions is the detailed state.
 	// +optional

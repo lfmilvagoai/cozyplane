@@ -26,6 +26,8 @@ type VPNGatewayWireGuardApplyConfiguration struct {
 	// ListenPort is the UDP port the WireGuard endpoint listens on. Zero lets
 	// the appliance pick the default.
 	ListenPort *int32 `json:"listenPort,omitempty"`
+	// AddressPools select a dedicated workstation gateway when nonempty.
+	AddressPools []VPNWireGuardAddressPoolApplyConfiguration `json:"addressPools,omitempty"`
 }
 
 // VPNGatewayWireGuardApplyConfiguration constructs a declarative configuration of the VPNGatewayWireGuard type for use with
@@ -39,5 +41,18 @@ func VPNGatewayWireGuard() *VPNGatewayWireGuardApplyConfiguration {
 // If called multiple times, the ListenPort field is set to the value of the last call.
 func (b *VPNGatewayWireGuardApplyConfiguration) WithListenPort(value int32) *VPNGatewayWireGuardApplyConfiguration {
 	b.ListenPort = &value
+	return b
+}
+
+// WithAddressPools adds the given value to the AddressPools field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the AddressPools field.
+func (b *VPNGatewayWireGuardApplyConfiguration) WithAddressPools(values ...*VPNWireGuardAddressPoolApplyConfiguration) *VPNGatewayWireGuardApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithAddressPools")
+		}
+		b.AddressPools = append(b.AddressPools, *values[i])
+	}
 	return b
 }

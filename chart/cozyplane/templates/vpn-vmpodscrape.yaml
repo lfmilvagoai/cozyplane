@@ -7,6 +7,9 @@ metadata:
   labels:
     {{- include "cozyplane.labels" . | nindent 4 }}
     app.kubernetes.io/component: vpn
+    {{- with .Values.vpn.observability.podScrape.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   namespaceSelector:
     any: true
@@ -17,7 +20,10 @@ spec:
     - port: vpn-metrics
       path: /metrics
       interval: {{ .Values.vpn.observability.podScrape.interval }}
+      scrapeTimeout: {{ .Values.vpn.observability.podScrape.scrapeTimeout }}
       relabelConfigs:
+        - targetLabel: job
+          replacement: cozyplane-vpn-gateways
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: namespace
         - sourceLabels: [__meta_kubernetes_pod_name]

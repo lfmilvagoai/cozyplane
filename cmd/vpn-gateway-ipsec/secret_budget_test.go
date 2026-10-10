@@ -14,10 +14,11 @@ import (
 
 func TestIPsecSecretBudgetBeforeVICICommands(t *testing.T) {
 	for _, eap := range []bool{false, true} {
-		p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", RemoteCIDRs: []string{"203.0.113.0/24"}}
+		p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", LocalCIDRs: []string{"10.10.0.0/16"}, RemoteCIDRs: []string{"203.0.113.0/24"}}
 		bad := "secret-canary-" + strings.Repeat("a", vpnlimits.IPsecAuthBytes)
 		if eap {
 			p.AuthMode, p.PSK, p.EAPIdentity, p.EAPPassword = "eap", "", "peer@example.invalid", bad
+			p.AddressPool, p.poolCIDR = "clients", "203.0.113.0/24"
 		} else {
 			p.PSK = bad
 		}
@@ -84,6 +85,7 @@ func TestIPsecTLSBudgetBeforeAnyVICICommand(t *testing.T) {
 }
 
 func TestIPsecOversizedCredentialConfigStopsBeforeKernel(t *testing.T) {
+	requireStartupCleanupCapability(t)
 	for _, tls := range []bool{false, true} {
 		cfg := config{Peers: []peer{{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", RemoteCIDRs: []string{"203.0.113.0/24"}}}}
 		if tls {

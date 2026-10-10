@@ -35,6 +35,21 @@ func blackholeVPNRoutes(routes []sdnv1alpha1.VPCGatewayRouteStatus) ([]sdnv1alph
 }
 
 func vpnGatewayInputProblem(gw *sdnv1alpha1.VPNGateway) string {
+	if wg := gw.Spec.WireGuard; wg != nil && len(wg.AddressPools) > 0 {
+		if gw.Spec.IPsec != nil || (haMode(gw) != "" && haMode(gw) != sdnv1alpha1.VPNGatewayHAModeWarmStandby) {
+			return "WireGuard client gateways require single or WarmStandby WireGuard appliances"
+		}
+		pools := make([]vpnlimits.WireGuardAddressPool, 0, min(len(wg.AddressPools), vpnlimits.AddressPools+1))
+		if len(wg.AddressPools) > vpnlimits.AddressPools {
+			return "WireGuard address pools exceed 128"
+		}
+		for _, p := range wg.AddressPools {
+			pools = append(pools, vpnlimits.WireGuardAddressPool{Name: p.Name, CIDR: p.CIDR, DNS: p.DNS})
+		}
+		if problem := vpnlimits.WireGuardAddressPoolsProblem(pools); problem != "" {
+			return problem
+		}
+	}
 	if len(gw.Spec.AdditionalVPCRefs) > 9 {
 		return "additional VPC references exceed nine"
 	}
@@ -71,6 +86,9 @@ func vpnGatewayInputProblem(gw *sdnv1alpha1.VPNGateway) string {
 		}
 	}
 	if ipsec := gw.Spec.IPsec; ipsec != nil {
+		if len(ipsec.AddressPools) > 0 && haMode(gw) == sdnv1alpha1.VPNGatewayHAModeActiveActive {
+			return "IPsec address pools do not support ActiveActive independent lease allocation"
+		}
 		if len(ipsec.AddressPools) > vpnlimits.AddressPools {
 			return "IPsec address pools exceed 128"
 		}

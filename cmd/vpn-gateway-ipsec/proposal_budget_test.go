@@ -6,7 +6,7 @@ import (
 )
 
 func TestIPsecProposalBudgetBeforeVICI(t *testing.T) {
-	p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", RemoteCIDRs: []string{"203.0.113.0/24"}}
+	p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", LocalCIDRs: []string{"10.10.0.0/16"}, RemoteCIDRs: []string{"203.0.113.0/24"}}
 	for _, proposals := range [][]string{make([]string, 17), {"input-canary-" + strings.Repeat("a", 128<<10)}} {
 		p.Proposals = proposals
 		sess := &recordingVICI{}

@@ -252,6 +252,34 @@ spec:
                   WireGuard configures a WireGuard endpoint. Exactly one tunnel backend is
                   set per gateway.
                 properties:
+                  addressPools:
+                    description: AddressPools select a dedicated workstation gateway
+                      when nonempty.
+                    items:
+                      description: VPNWireGuardAddressPool is a persistent address
+                        pool for workstation clients.
+                      properties:
+                        cidr:
+                          type: string
+                        dns:
+                          description: DNS lists optional resolver addresses included
+                            in client configuration.
+                          items:
+                            type: string
+                          maxItems: 16
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        name:
+                          type: string
+                      required:
+                      - cidr
+                      - name
+                      type: object
+                    maxItems: 128
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   listenPort:
                     description: |-
                       ListenPort is the UDP port the WireGuard endpoint listens on. Zero lets

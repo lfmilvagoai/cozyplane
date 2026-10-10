@@ -78,13 +78,13 @@ rules:
   # the tunnel workload.
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpngateways"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpngateways/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpnconnections"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpnconnections/status"]
     verbs: ["get", "update", "patch"]
@@ -131,7 +131,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["apps"]
     resources: ["replicasets"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
   # Severed-gateway heal: recreate a Ready gateway pod whose .1 Port is gone.
   # watch: the persistent-Port controller watches virt-launcher pods to drive
   # live-migration cutover (kubevirt.io/nodeName) and GC.

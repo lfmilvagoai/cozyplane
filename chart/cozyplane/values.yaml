@@ -89,15 +89,24 @@ vpn:
       # Keep appliance discovery on by default when VictoriaMetrics is present.
       enabled: true
       interval: 30s
+      scrapeTimeout: 10s
+      # Match the installation's VMAgent podScrapeSelector, if it has one.
+      additionalLabels: {}
     rules:
       enabled: true
+      # Match the installation's VMAlert ruleSelector, if it has one.
+      additionalLabels: {}
       # Idle tunnels are valid for many installations, so this alert is opt-in.
       noTraffic:
         enabled: false
         window: 30m
     dashboard:
       enabled: true
-      # Empty matches every Grafana instance visible to the operator.
+      additionalLabels: {}
+      # Keep the operator's namespace boundary unless explicitly configured.
+      allowCrossNamespaceImport: false
+      # Empty matches Grafana instances in this release's namespace. When
+      # Grafana is elsewhere, opt in above and select the intended instance.
       instanceSelector: {}
 
 # Observability (docs/observability.md). ALL OFF BY DEFAULT, matching
