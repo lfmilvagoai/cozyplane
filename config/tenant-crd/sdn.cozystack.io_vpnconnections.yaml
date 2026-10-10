@@ -160,6 +160,45 @@ spec:
                   WireGuard configures the peer. Exactly one tunnel backend is set, and it
                   must match the gateway's backend.
                 properties:
+                  client:
+                    description: |-
+                      Client selects managed workstation access instead of site-to-site routes.
+                      The workstation creates and retains its private key.
+                    properties:
+                      addressPools:
+                        description: |-
+                          AddressPools select at most one pool per IP family from the gateway.
+                          Immutable after creation.
+                        items:
+                          type: string
+                        maxItems: 2
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      vpcRefs:
+                        description: VPCRefs identify the permitted VPCs among those
+                          served by the gateway.
+                        items:
+                          description: LocalVPCRef references a VPC in the same namespace
+                            as the referring object.
+                          properties:
+                            name:
+                              description: Name is the VPC name within the referring
+                                object's namespace.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        maxItems: 10
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - addressPools
+                    - vpcRefs
+                    type: object
                   peerEndpoint:
                     description: |-
                       PeerEndpoint is the remote peer's host:port. Optional — a roaming peer may
@@ -199,7 +238,6 @@ spec:
                 type: object
             required:
             - gatewayRef
-            - remoteCIDRs
             type: object
           status:
             description: VPNConnectionStatus is the observed state of a VPNConnection.
@@ -211,6 +249,37 @@ spec:
                   type: string
                 type: array
                 x-kubernetes-list-type: atomic
+              clientConfig:
+                description: ClientConfig is published only after the current configuration
+                  is applied.
+                properties:
+                  allowedIPs:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  dns:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  endpoint:
+                    type: string
+                  mtu:
+                    format: int32
+                    type: integer
+                  persistentKeepalive:
+                    format: int32
+                    type: integer
+                  serverPublicKey:
+                    type: string
+                required:
+                - allowedIPs
+                - endpoint
+                - mtu
+                - persistentKeepalive
+                - serverPublicKey
+                type: object
               conditions:
                 description: Conditions is the detailed state.
                 items:

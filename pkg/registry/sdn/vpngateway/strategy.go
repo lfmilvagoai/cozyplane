@@ -24,6 +24,7 @@ import (
 
 	"github.com/lllamnyp/cozyplane/api/sdn"
 	"github.com/lllamnyp/cozyplane/internal/vpnlimits"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -75,12 +76,21 @@ func (vpnGatewayStrategy) NamespaceScoped() bool {
 func (vpnGatewayStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	gw := obj.(*sdn.VPNGateway)
 	gw.Status = sdn.VPNGatewayStatus{}
+	if wireGuardClientGatewayMode(gw) || gw.Spec.IPsec != nil {
+		gw.Generation = 1
+	}
 }
 
 func (vpnGatewayStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newGW := obj.(*sdn.VPNGateway)
 	oldGW := old.(*sdn.VPNGateway)
 	newGW.Status = oldGW.Status
+	if wireGuardClientGatewayMode(newGW) || wireGuardClientGatewayMode(oldGW) || newGW.Spec.IPsec != nil || oldGW.Spec.IPsec != nil {
+		newGW.Generation = oldGW.Generation
+		if !apiequality.Semantic.DeepEqual(newGW.Spec, oldGW.Spec) {
+			newGW.Generation++
+		}
+	}
 }
 
 func (vpnGatewayStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
@@ -104,7 +114,21 @@ func (vpnGatewayStrategy) Canonicalize(obj runtime.Object) {
 }
 
 func (vpnGatewayStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return validateVPNGateway(obj.(*sdn.VPNGateway))
+	gw, previous := obj.(*sdn.VPNGateway), old.(*sdn.VPNGateway)
+	client, wasClient := wireGuardClientGatewayMode(gw), wireGuardClientGatewayMode(previous)
+	// Permit finalizer cleanup of an unchanged legacy client specification even
+	// when stricter current validation would reject it on a new object.
+	if wasClient && apiequality.Semantic.DeepEqual(gw.Spec, previous.Spec) {
+		return nil
+	}
+	if client != wasClient {
+		return field.ErrorList{field.Forbidden(field.NewPath("spec", "wireguard", "addressPools"), "client gateway mode is immutable; create a new gateway")}
+	}
+	return validateVPNGateway(gw)
+}
+
+func wireGuardClientGatewayMode(gw *sdn.VPNGateway) bool {
+	return gw.Spec.WireGuard != nil && len(gw.Spec.WireGuard.AddressPools) != 0
 }
 
 func validateVPNGateway(gw *sdn.VPNGateway) field.ErrorList {
@@ -129,6 +153,25 @@ func validateVPNGateway(gw *sdn.VPNGateway) field.ErrorList {
 	}
 	if len(errs) != 0 {
 		return errs
+	}
+	if wg := gw.Spec.WireGuard; wg != nil {
+		path := specPath.Child("wireguard")
+		if wg.ListenPort < 0 || wg.ListenPort > 65535 {
+			return field.ErrorList{field.Invalid(path.Child("listenPort"), nil, "must be between 0 and 65535")}
+		}
+		if len(wg.AddressPools) > vpnlimits.AddressPools {
+			return field.ErrorList{field.TooMany(path.Child("addressPools"), len(wg.AddressPools), vpnlimits.AddressPools)}
+		}
+		pools := make([]vpnlimits.WireGuardAddressPool, len(wg.AddressPools))
+		for i, pool := range wg.AddressPools {
+			pools[i] = vpnlimits.WireGuardAddressPool{Name: pool.Name, CIDR: pool.CIDR, DNS: pool.DNS}
+		}
+		if problem := vpnlimits.WireGuardAddressPoolsProblem(pools); problem != "" {
+			return field.ErrorList{field.Invalid(path.Child("addressPools"), nil, problem)}
+		}
+		if len(wg.AddressPools) != 0 && gw.Spec.HA != nil && gw.Spec.HA.Mode != sdn.VPNGatewayHAModeWarmStandby {
+			return field.ErrorList{field.Forbidden(specPath.Child("ha", "mode"), "WireGuard client gateways support only single-appliance or WarmStandby mode")}
+		}
 	}
 	if ipsec := gw.Spec.IPsec; ipsec != nil {
 		if problem := vpnlimits.IPsecScalarProblem("", ipsec.LocalIdentity); problem != "" {
@@ -250,6 +293,9 @@ func validateVPNGateway(gw *sdn.VPNGateway) field.ErrorList {
 	}
 	if ipsec := gw.Spec.IPsec; ipsec != nil {
 		poolsPath := specPath.Child("ipsec", "addressPools")
+		if len(ipsec.AddressPools) > 0 && gw.Spec.HA != nil && gw.Spec.HA.Mode == sdn.VPNGatewayHAModeActiveActive {
+			return field.ErrorList{field.Forbidden(poolsPath, "ActiveActive IPsec appliances do not coordinate client address leases")}
+		}
 		names := map[string]int{}
 		parsed := make([]*net.IPNet, 0, len(ipsec.AddressPools))
 		for i, pool := range ipsec.AddressPools {
@@ -328,6 +374,9 @@ func (vpnGatewayStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old r
 	newGW := obj.(*sdn.VPNGateway)
 	oldGW := old.(*sdn.VPNGateway)
 	newGW.Spec = oldGW.Spec
+	if wireGuardClientGatewayMode(oldGW) || oldGW.Spec.IPsec != nil {
+		newGW.Generation = oldGW.Generation
+	}
 }
 
 func (vpnGatewayStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {

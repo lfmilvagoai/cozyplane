@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -336,38 +337,45 @@ func hubLegPort(name, vpcNS, vpcName, podNS, podName, ip string) *sdnv1alpha1.Po
 // the same order — and treating a not-yet-minted leg as "not ready" (nil),
 // per docs/vpn.md §3.3.
 func TestResolveVPCLegPorts(t *testing.T) {
-	gw := &sdnv1alpha1.VPNGateway{}
-	gw.Name, gw.Namespace = "gateway", "tenant"
-	vpc := &sdnv1alpha1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "vpc-b", Namespace: "tenant"}}
-	appliances := []applianceResolution{
-		{PodName: "gateway-vpn-0"},
-		{PodName: "gateway-vpn-1"},
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordered selected appliance legs", true: "missing leg is not ready"}[missing], func(t *testing.T) {
+			r, gw, _, c := vpnApplianceIndexFixture(t, 0, true)
+			vpc := &sdnv1alpha1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "vpc-b", Namespace: gw.Namespace}, Spec: sdnv1alpha1.VPCSpec{CIDRs: []string{"10.20.0.0/24"}}, Status: sdnv1alpha1.VPCStatus{VNI: 202}}
+			first := &corev1.Pod{}
+			if err := c.Get(t.Context(), client.ObjectKey{Namespace: gw.Namespace, Name: "appliance"}, first); err != nil {
+				t.Fatal(err)
+			}
+			second := first.DeepCopy()
+			second.Name, second.UID, second.ResourceVersion = "standby", "standby-current", ""
+			second.Status.PodIP = "192.0.2.11"
+			if err := c.Create(t.Context(), second); err != nil {
+				t.Fatal(err)
+			}
+			appliances := []applianceResolution{{PodName: first.Name, PodUID: first.UID}, {PodName: second.Name, PodUID: second.UID}}
+			for i, pod := range []*corev1.Pod{first, second} {
+				if missing && i == 1 {
+					continue
+				}
+				name, ip := "v202.10-20-0-1", "10.20.0.1"
+				if i == 1 {
+					name, ip = "v202.10-20-0-2", "10.20.0.2"
+				}
+				port := hubLegPort(name, gw.Namespace, vpc.Name, pod.Namespace, pod.Name, ip)
+				port.Labels[sdnv1alpha1.LabelPodUID] = string(pod.UID)
+				if err := c.index.Add(port); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := r.resolveVPCLegPorts(t.Context(), gw, vpc, appliances)
+			if missing {
+				if got != nil {
+					t.Fatalf("missing selected leg resolved as %v", got)
+				}
+			} else if len(got) != 2 || got[0] != "v202.10-20-0-1" || got[1] != "v202.10-20-0-2" {
+				t.Fatalf("selected appliance order changed: %v", got)
+			}
+		})
 	}
-
-	t.Run("returns exactly the given appliances' leg ports, in order", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
-			hubLegPort("vpc-b-leg-1", "tenant", "vpc-b", "tenant", "gateway-vpn-1", "10.20.0.2"),
-			hubLegPort("vpc-b-leg-0", "tenant", "vpc-b", "tenant", "gateway-vpn-0", "10.20.0.1"),
-		).Build()
-		r := &VPNGatewayReconciler{Client: c}
-
-		got := r.resolveVPCLegPorts(context.Background(), gw, vpc, appliances)
-		if len(got) != 2 || got[0] != "vpc-b-leg-0" || got[1] != "vpc-b-leg-1" {
-			t.Fatalf("resolveVPCLegPorts = %v, want [vpc-b-leg-0 vpc-b-leg-1] in appliance order", got)
-		}
-	})
-
-	t.Run("a missing leg reports not-ready as nil", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(
-			hubLegPort("vpc-b-leg-0", "tenant", "vpc-b", "tenant", "gateway-vpn-0", "10.20.0.1"),
-			// gateway-vpn-1's leg has not been minted yet.
-		).Build()
-		r := &VPNGatewayReconciler{Client: c}
-
-		if got := r.resolveVPCLegPorts(context.Background(), gw, vpc, appliances); got != nil {
-			t.Fatalf("resolveVPCLegPorts = %v, want nil when a leg is missing", got)
-		}
-	})
 }
 
 // TestEnsureBindingsPrunesStale covers the forwarding-grant reconciliation:

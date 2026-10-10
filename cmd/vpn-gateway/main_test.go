@@ -30,6 +30,19 @@ func TestSelectPrivateKey(t *testing.T) {
 	}
 }
 
+func TestConfigChecksumRejectsStaleProjectedSecret(t *testing.T) {
+	current, old := []byte(`{"clientMode":true,"peers":[]}`), []byte(`{"clientMode":false,"peers":[]}`)
+	if err := checkExpectedConfig(current, configChecksum(current)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkExpectedConfig(old, configChecksum(current)); err == nil {
+		t.Fatal("stale config accepted")
+	}
+	if err := checkExpectedConfig(old, ""); err != nil {
+		t.Fatal("legacy site config rejected", err)
+	}
+}
+
 func TestSelectInstancePeers(t *testing.T) {
 	sets := [][]peer{{{Name: "first"}}, {{Name: "second"}}}
 	got, err := selectInstancePeers(config{PeerInstances: sets}, "gateway-vpn-1")

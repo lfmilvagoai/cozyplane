@@ -29,6 +29,9 @@ func (r *VPNGatewayReconciler) protectRouteIntent(ctx context.Context, gw *sdn.V
 	var desired []sdn.VPCGatewayRouteStatus
 	for _, ref := range refs {
 		for i := range conns {
+			if !clientAllowsVPC(&conns[i], ref.Name) {
+				continue
+			}
 			if cidrs := conns[i].Spec.RemoteCIDRs; len(cidrs) != 0 {
 				desired = append(desired, sdn.VPCGatewayRouteStatus{VPCRef: ref, CIDRs: cidrs})
 			}

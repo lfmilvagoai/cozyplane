@@ -17,6 +17,27 @@ they're discovered rather than leaving them only in issues.
 
 ---
 
+- [x] Local extended IPsec tunnel validation: dedicated Debian KVM guest under
+  Docker Desktop with XFRM interfaces, real IKEv2 peers, IPv4/IPv6, multi-VPC
+  authorization, 1/8/16-peer load, ten-minute soak, impairment/recovery, rekey,
+  certificate/EAP pools, credential revocation and appliance failover. Review
+  fixes and ordinary cleanup passed on the final image/kernel; see
+  `test/ipsec-validation.md` for phase-specific provenance, losses and kernel/
+  availability limits. This tick records working-tree validation only.
+- [ ] Qualify IPsec on a real external cluster/provider and native Windows
+  IKEv2 clients; merge remains outstanding.
+- [x] Local VPN monitoring contract: WireGuard/IPsec exposition, VictoriaMetrics
+  HTTP ingestion, HA aggregation, missing-target/family/dependency alerts and
+  Grafana queries tested; see `test/vpn-monitoring-validation.md`. Working-tree
+  validation only; real VMAgent/VMAlert/Grafana selection remains to verify.
+
+- [ ] WireGuard workstation backend: stable client pools, per-connection VPC grants,
+  public client configuration and confirmed revocation implemented locally.
+  Docker Desktop integration, native Windows application traffic, 1/8/16-client
+  load, ten-minute soak, packet impairment and adversarial review passed; see
+  `test/wireguard-client-validation.md` for losses and availability limits.
+  Real-cluster validation and merge remain outstanding.
+
 - [x] Security audit SEC223: bound FloatingIP admission, legacy index keys and status diagnostics; verify ownership-preserving withdrawal, valid recovery and agent projection. Main module Linux race/vet passed locally.
 - [x] Security audit SEC224: prevent predecessor Pod and sandbox Ports from masking or replacing current ServiceVIP backends; reuse bounded sandbox proofs and verify list-order independence. Main module Linux race/vet passed locally.
 

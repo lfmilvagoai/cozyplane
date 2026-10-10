@@ -237,7 +237,15 @@ type VPNGatewayHA struct {
 
 // VPNGatewayWireGuard configures a WireGuard tunnel endpoint.
 type VPNGatewayWireGuard struct {
-	ListenPort int32
+	ListenPort   int32
+	AddressPools []VPNWireGuardAddressPool
+}
+
+// VPNWireGuardAddressPool is a persistent client address pool.
+type VPNWireGuardAddressPool struct {
+	Name string
+	CIDR string
+	DNS  []string
 }
 
 // VPNGatewayIPsec configures an IKEv2/strongSwan tunnel endpoint.
@@ -334,12 +342,29 @@ type LocalVPNGatewayRef struct {
 
 // VPNConnectionWireGuard configures a WireGuard peer.
 type VPNConnectionWireGuard struct {
+	Client                *VPNWireGuardClient
 	PeerPublicKey         string
 	PeerPublicKeys        []string
 	PeerEndpoint          string
 	PeerEndpoints         []string
 	PresharedKeySecretRef string
 	PersistentKeepalive   int32
+}
+
+// VPNWireGuardClient selects client address pools and authorized local VPCs.
+type VPNWireGuardClient struct {
+	AddressPools []string
+	VPCRefs      []LocalVPCRef
+}
+
+// VPNWireGuardClientConfig contains public parameters for a workstation client.
+type VPNWireGuardClientConfig struct {
+	Endpoint            string
+	ServerPublicKey     string
+	AllowedIPs          []string
+	DNS                 []string
+	MTU                 int32
+	PersistentKeepalive int32
 }
 
 // VPNConnectionIPsecAuth configures IPsec peer authentication.
@@ -385,6 +410,7 @@ type VPNConnectionStatus struct {
 	LastHandshake     *metav1.Time
 	ObservedAt        *metav1.Time
 	AssignedAddresses []string
+	ClientConfig      *VPNWireGuardClientConfig
 	Conditions        []metav1.Condition
 }
 

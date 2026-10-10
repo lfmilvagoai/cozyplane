@@ -170,6 +170,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &sdnv1alpha1.VPNIPsecCertificateAuthApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("VPNIPsecEAPAuth"):
 		return &sdnv1alpha1.VPNIPsecEAPAuthApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPNWireGuardAddressPool"):
+		return &sdnv1alpha1.VPNWireGuardAddressPoolApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPNWireGuardClient"):
+		return &sdnv1alpha1.VPNWireGuardClientApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPNWireGuardClientConfig"):
+		return &sdnv1alpha1.VPNWireGuardClientConfigApplyConfiguration{}
 
 	}
 	return nil

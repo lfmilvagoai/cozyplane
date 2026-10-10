@@ -112,6 +112,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNIPsecAddressPool":      schema_cozyplane_api_sdn_v1alpha1_VPNIPsecAddressPool(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNIPsecCertificateAuth":  schema_cozyplane_api_sdn_v1alpha1_VPNIPsecCertificateAuth(ref),
 		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNIPsecEAPAuth":          schema_cozyplane_api_sdn_v1alpha1_VPNIPsecEAPAuth(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardAddressPool":  schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardAddressPool(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClient":       schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardClient(ref),
+		"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClientConfig": schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardClientConfig(ref),
 		resource.Quantity{}.OpenAPIModelName():                                    schema_apimachinery_pkg_api_resource_Quantity(ref),
 		v1.APIGroup{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_APIGroup(ref),
 		v1.APIGroupList{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_APIGroupList(ref),
@@ -3274,7 +3277,7 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNConnectionSpec(ref common.ReferenceCal
 						},
 					},
 				},
-				Required: []string{"gatewayRef", "remoteCIDRs"},
+				Required: []string{"gatewayRef"},
 			},
 		},
 		Dependencies: []string{
@@ -3328,6 +3331,12 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNConnectionStatus(ref common.ReferenceC
 							},
 						},
 					},
+					"clientConfig": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClientConfig is published only after the current configuration is applied.",
+							Ref:         ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClientConfig"),
+						},
+					},
 					"conditions": {
 						VendorExtensible: spec.VendorExtensible{
 							Extensions: spec.Extensions{
@@ -3354,7 +3363,7 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNConnectionStatus(ref common.ReferenceC
 			},
 		},
 		Dependencies: []string{
-			v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClientConfig", v1.Condition{}.OpenAPIModelName(), v1.Time{}.OpenAPIModelName()},
 	}
 }
 
@@ -3365,6 +3374,12 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNConnectionWireGuard(ref common.Referen
 				Description: "VPNConnectionWireGuard configures a WireGuard peer.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"client": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Client selects managed workstation access instead of site-to-site routes. The workstation creates and retains its private key.",
+							Ref:         ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClient"),
+						},
+					},
 					"peerPublicKey": {
 						SchemaProps: spec.SchemaProps{
 							Description: "PeerPublicKey is the remote peer's WireGuard public key for a single tunnel. It is mutually exclusive with PeerPublicKeys.",
@@ -3436,6 +3451,8 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNConnectionWireGuard(ref common.Referen
 				},
 			},
 		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardClient"},
 	}
 }
 
@@ -4023,9 +4040,33 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNGatewayWireGuard(ref common.ReferenceC
 							Format:      "int32",
 						},
 					},
+					"addressPools": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"name",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "AddressPools select a dedicated workstation gateway when nonempty.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardAddressPool"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.VPNWireGuardAddressPool"},
 	}
 }
 
@@ -4126,6 +4167,192 @@ func schema_cozyplane_api_sdn_v1alpha1_VPNIPsecEAPAuth(ref common.ReferenceCallb
 					},
 				},
 				Required: []string{"identity", "secretRef"},
+			},
+		},
+	}
+}
+
+func schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardAddressPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPNWireGuardAddressPool is a persistent address pool for workstation clients.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"cidr": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"dns": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "DNS lists optional resolver addresses included in client configuration.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"name", "cidr"},
+			},
+		},
+	}
+}
+
+func schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardClient(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPNWireGuardClient selects pools and explicit same-namespace VPC permissions.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"addressPools": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "AddressPools select at most one pool per IP family from the gateway. Immutable after creation.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"vpcRefs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"name",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "VPCRefs identify the permitted VPCs among those served by the gateway.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.LocalVPCRef"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"addressPools", "vpcRefs"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/lllamnyp/cozyplane/api/sdn/v1alpha1.LocalVPCRef"},
+	}
+}
+
+func schema_cozyplane_api_sdn_v1alpha1_VPNWireGuardClientConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VPNWireGuardClientConfig contains public parameters for a workstation client. No private key or preshared key is exposed here.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"endpoint": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"serverPublicKey": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"allowedIPs": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"dns": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"mtu": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+					"persistentKeepalive": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+				},
+				Required: []string{"endpoint", "serverPublicKey", "allowedIPs", "mtu", "persistentKeepalive"},
 			},
 		},
 	}

@@ -89,12 +89,14 @@ func TestPeerIdentityCollection(t *testing.T) {
 func (s *recordingVICI) CommandRequest(command string, request *vici.Message) (*vici.Message, error) {
 	s.commands = append(s.commands, command)
 	s.requests = append(s.requests, request)
-	return vici.NewMessage(), nil
+	response := vici.NewMessage()
+	_ = response.Set("success", "yes")
+	return response, nil
 }
 
 func TestPeerCredentialAndTrafficIsolation(t *testing.T) {
 	s := &recordingVICI{}
-	p := peer{Name: "peer-a", PSK: "test-credential", RemoteID: "192.0.2.10", RemoteCIDRs: []string{"10.20.0.0/16"}, IfID: 7}
+	p := peer{Name: "peer-a", PSK: "test-credential", RemoteID: "192.0.2.10", LocalCIDRs: []string{"10.10.0.0/16"}, RemoteCIDRs: []string{"10.20.0.0/16"}, IfID: 7}
 	if err := loadPeer(s, p); err != nil {
 		t.Fatal(err)
 	}

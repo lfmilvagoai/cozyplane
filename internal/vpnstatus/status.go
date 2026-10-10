@@ -23,9 +23,10 @@ import "time"
 
 // Snapshot is one point-in-time view of every configured connection.
 type Snapshot struct {
-	Backend     string                `json:"backend"`
-	ObservedAt  time.Time             `json:"observedAt"`
-	Connections map[string]Connection `json:"connections"`
+	ConfigChecksum string                `json:"configChecksum,omitempty"`
+	Backend        string                `json:"backend"`
+	ObservedAt     time.Time             `json:"observedAt"`
+	Connections    map[string]Connection `json:"connections"`
 }
 
 // Connection is the live state of one VPNConnection.

@@ -39,6 +39,8 @@ type VPNConnectionStatusApplyConfiguration struct {
 	ObservedAt *v1.Time `json:"observedAt,omitempty"`
 	// AssignedAddresses are the virtual IPs currently leased to this identity.
 	AssignedAddresses []string `json:"assignedAddresses,omitempty"`
+	// ClientConfig is published only after the current configuration is applied.
+	ClientConfig *VPNWireGuardClientConfigApplyConfiguration `json:"clientConfig,omitempty"`
 	// Conditions is the detailed state.
 	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
@@ -80,6 +82,14 @@ func (b *VPNConnectionStatusApplyConfiguration) WithAssignedAddresses(values ...
 	for i := range values {
 		b.AssignedAddresses = append(b.AssignedAddresses, values[i])
 	}
+	return b
+}
+
+// WithClientConfig sets the ClientConfig field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ClientConfig field is set to the value of the last call.
+func (b *VPNConnectionStatusApplyConfiguration) WithClientConfig(value *VPNWireGuardClientConfigApplyConfiguration) *VPNConnectionStatusApplyConfiguration {
+	b.ClientConfig = value
 	return b
 }
 

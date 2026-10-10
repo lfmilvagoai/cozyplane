@@ -106,6 +106,23 @@ type VPNGatewayWireGuard struct {
 	// the appliance pick the default.
 	// +optional
 	ListenPort int32 `json:"listenPort,omitempty"`
+	// AddressPools select a dedicated workstation gateway when nonempty.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=128
+	AddressPools []VPNWireGuardAddressPool `json:"addressPools,omitempty"`
+}
+
+// VPNWireGuardAddressPool is a persistent address pool for workstation clients.
+type VPNWireGuardAddressPool struct {
+	Name string `json:"name"`
+	CIDR string `json:"cidr"`
+	// DNS lists optional resolver addresses included in client configuration.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=16
+	DNS []string `json:"dns,omitempty"`
 }
 
 // VPNGatewayIPsec configures an IPsec (IKEv2) tunnel endpoint terminated by a

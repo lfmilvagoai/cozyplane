@@ -59,6 +59,9 @@ func TestVPNLegacyReferenceRejectionDrainsAndRecovers(t *testing.T) {
 					gw.Spec.VPCRef.Name = name
 				case "TLS":
 					gw.Spec.IPsec = &sdnv1alpha1.VPNGatewayIPsec{CredentialSecretRef: name}
+					if name == "" {
+						gw.Spec.IPsec = nil
+					}
 				case "WG-PSK":
 					peer.Spec.WireGuard.PresharedKeySecretRef = name
 					return peer

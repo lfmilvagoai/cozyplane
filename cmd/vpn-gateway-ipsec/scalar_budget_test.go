@@ -7,7 +7,7 @@ import (
 
 func TestIPsecScalarBudgetBeforeVICIAndRecovery(t *testing.T) {
 	for _, field := range []string{"identity", "eap", "address", "local"} {
-		p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", RemoteCIDRs: []string{"203.0.113.0/24"}}
+		p := peer{Name: "peer", RemoteID: "peer.example.invalid", PSK: "test-key", LocalCIDRs: []string{"10.10.0.0/16"}, RemoteCIDRs: []string{"203.0.113.0/24"}}
 		large := "input-canary-" + strings.Repeat("a", 128<<10)
 		switch field {
 		case "identity":
@@ -29,7 +29,7 @@ func TestIPsecScalarBudgetBeforeVICIAndRecovery(t *testing.T) {
 			t.Fatal("invalid scalar reached VICI")
 		}
 	}
-	p := peer{Name: "peer", RemoteID: "keyid:" + strings.Repeat("a", 4096-len("keyid:")), PeerAddress: strings.Repeat("a", 512), PSK: "test-key", RemoteCIDRs: []string{"203.0.113.0/24"}}
+	p := peer{Name: "peer", RemoteID: "keyid:" + strings.Repeat("a", 4096-len("keyid:")), PeerAddress: strings.Repeat("a", 512), PSK: "test-key", LocalCIDRs: []string{"10.10.0.0/16"}, RemoteCIDRs: []string{"203.0.113.0/24"}}
 	sess := &recordingVICI{}
 	if err := validatePeerIdentities([]peer{p}); err != nil {
 		t.Fatal(err)

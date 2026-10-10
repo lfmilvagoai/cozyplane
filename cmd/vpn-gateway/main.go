@@ -26,12 +26,12 @@ limitations under the License.
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/lllamnyp/cozyplane/internal/httpserver"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -42,6 +42,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/lllamnyp/cozyplane/internal/vpnclientfilter"
 	"github.com/lllamnyp/cozyplane/internal/vpnlimits"
 	"github.com/lllamnyp/cozyplane/internal/vpnnet"
 	"github.com/lllamnyp/cozyplane/internal/vpnstatus"
@@ -49,9 +50,12 @@ import (
 
 const wgDev = "wg0"
 
+const clientDeviceAlias = "cozyplane-vpn-client"
+
 // config is the mounted tunnel description. It carries the private key and PSKs,
 // so it is delivered as a Secret, never a ConfigMap.
 type config struct {
+	ClientMode    bool     `json:"clientMode,omitempty"`
 	PrivateKey    string   `json:"privateKey"`
 	PrivateKeys   []string `json:"privateKeys,omitempty"`
 	ListenPort    int      `json:"listenPort,omitempty"`
@@ -61,12 +65,13 @@ type config struct {
 }
 
 type peer struct {
-	Name         string   `json:"name,omitempty"` // the VPNConnection name, for metric labels
-	PublicKey    string   `json:"publicKey"`
-	Endpoint     string   `json:"endpoint,omitempty"` // host:port; empty for a responder-only peer
-	AllowedIPs   []string `json:"allowedIPs"`         // the remote CIDRs
-	PresharedKey string   `json:"presharedKey,omitempty"`
-	Keepalive    int      `json:"keepalive,omitempty"`
+	AllowedDestinationCIDRs []string `json:"allowedDestinationCIDRs,omitempty"`
+	Name                    string   `json:"name,omitempty"` // the VPNConnection name, for metric labels
+	PublicKey               string   `json:"publicKey"`
+	Endpoint                string   `json:"endpoint,omitempty"` // host:port; empty for a responder-only peer
+	AllowedIPs              []string `json:"allowedIPs"`         // the remote CIDRs
+	PresharedKey            string   `json:"presharedKey,omitempty"`
+	Keepalive               int      `json:"keepalive,omitempty"`
 }
 
 func main() {
@@ -82,14 +87,39 @@ func main() {
 }
 
 func run(path string, log *slog.Logger) error {
+	// A previous client device retains its TC filter across process death. Close
+	// that marked device even when the replacement Secret is unreadable/invalid.
+	if existing, err := netlink.LinkByName(wgDev); err == nil && existing.Attrs().Alias == clientDeviceAlias {
+		if err := removeClientDevice(existing); err != nil {
+			return err
+		}
+	}
 	// #nosec G304 G703 -- VPN_CONFIG is an operator-set environment path to the controller-mounted Secret; tenant requests cannot select this path.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read config %q: %w", path, err)
 	}
+	if err := checkExpectedConfig(raw, os.Getenv("VPN_CONFIG_CHECKSUM")); err != nil {
+		return err
+	}
 	var cfg config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return fmt.Errorf("parse config: %w", err)
+	}
+	// A restarted client appliance must not inherit an up tunnel with obsolete
+	// peers, routes or permissions. Delete its dedicated device before validation.
+	if cfg.ClientMode {
+		if len(cfg.Peers) > vpnclientfilter.MaxPeers {
+			return fmt.Errorf("client peer capacity exceeded")
+		}
+		if len(cfg.PrivateKeys) > 1 || len(cfg.PeerInstances) > 1 {
+			return fmt.Errorf("client gateway requires one WireGuard identity and peer set")
+		}
+		if existing, err := netlink.LinkByName(wgDev); err == nil {
+			if err := removeClientDevice(existing); err != nil {
+				return err
+			}
+		}
 	}
 	privateKey, err := selectPrivateKey(cfg, os.Getenv("POD_NAME"))
 	if err != nil {
@@ -109,11 +139,6 @@ func run(path string, log *slog.Logger) error {
 	}
 	cfg.Peers = instancePeers
 
-	// The appliance forwards between its WireGuard leg and its VPC leg.
-	if err := vpnnet.EnsureForwarding(); err != nil {
-		return err
-	}
-
 	// Create the kernel WireGuard device (idempotent — a restart re-adopts it).
 	link := &netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: wgDev}}
 	if err := netlink.LinkAdd(link); err != nil && !os.IsExist(err) {
@@ -124,6 +149,33 @@ func run(path string, log *slog.Logger) error {
 	dev, err := netlink.LinkByName(wgDev)
 	if err != nil {
 		return fmt.Errorf("find %s: %w", wgDev, err)
+	}
+	if cfg.ClientMode {
+		// The TC filter survives abrupt process death; orderly exits delete the
+		// device before descriptors can disappear. Errors never expose the tunnel.
+		defer func() { _ = netlink.LinkSetDown(dev); _ = netlink.LinkDel(dev) }()
+		if err := netlink.LinkSetAlias(dev, clientDeviceAlias); err != nil {
+			return fmt.Errorf("mark client tunnel: %w", err)
+		}
+		clientPeers := make([]vpnclientfilter.Peer, 0, len(cfg.Peers))
+		publicKeys := make(map[string]struct{}, len(cfg.Peers))
+		for _, p := range cfg.Peers {
+			if p.Endpoint != "" {
+				return fmt.Errorf("client peer cannot have a fixed endpoint")
+			}
+			if _, exists := publicKeys[p.PublicKey]; exists {
+				return fmt.Errorf("client peers have a duplicate public key")
+			}
+			publicKeys[p.PublicKey] = struct{}{}
+			clientPeers = append(clientPeers, vpnclientfilter.Peer{Addresses: p.AllowedIPs, Destinations: p.AllowedDestinationCIDRs})
+		}
+		if err := vpnclientfilter.Install(dev, clientPeers); err != nil {
+			return err
+		}
+	}
+	// Enabling forwarding comes after the client policy is successfully attached.
+	if err := vpnnet.EnsureForwarding(); err != nil {
+		return err
 	}
 	if cfg.MTU > 0 {
 		if err := netlink.LinkSetMTU(dev, cfg.MTU); err != nil {
@@ -175,11 +227,36 @@ func run(path string, log *slog.Logger) error {
 			names[k] = p.Name
 		}
 	}
-	go serveMetrics(wg, names, log)
+	checksum := ""
+	if cfg.ClientMode {
+		checksum = configChecksum(raw)
+	}
+	go serveMetrics(wg, names, log, checksum)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	return nil
+}
+
+func configChecksum(raw []byte) string { return fmt.Sprintf("%x", sha256.Sum256(raw)) }
+
+// A projected Secret may briefly lag the desired rollout. Fail before opening
+// the tunnel so the normal container restart reads the latest projection.
+func checkExpectedConfig(raw []byte, expected string) error {
+	if expected != "" && expected != configChecksum(raw) {
+		return fmt.Errorf("mounted configuration does not match the requested rollout")
+	}
+	return nil
+}
+
+func removeClientDevice(dev netlink.Link) error {
+	if err := netlink.LinkSetDown(dev); err != nil {
+		return fmt.Errorf("close previous client tunnel: %w", err)
+	}
+	if err := netlink.LinkDel(dev); err != nil {
+		return fmt.Errorf("remove previous client tunnel: %w", err)
+	}
 	return nil
 }
 
@@ -241,70 +318,8 @@ const wireGuardHandshakeTimeout = 180 * time.Second
 
 // serveMetrics exposes per-connection WireGuard counters in Prometheus text
 // format on metricsAddr. Each scrape reads live kernel state via wgctrl.
-func serveMetrics(wg *wgctrl.Client, names map[wgtypes.Key]string, log *slog.Logger) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
-		dev, err := wg.Device(wgDev)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		var b strings.Builder
-		b.WriteString("# HELP cozyplane_vpn_connection_rx_bytes_total Bytes received from the peer over the tunnel.\n")
-		b.WriteString("# TYPE cozyplane_vpn_connection_rx_bytes_total counter\n")
-		for i := range dev.Peers {
-			b.WriteString(fmt.Sprintf("cozyplane_vpn_connection_rx_bytes_total{connection=%q,backend=\"wireguard\"} %d\n",
-				connLabel(names, dev.Peers[i].PublicKey), dev.Peers[i].ReceiveBytes))
-		}
-		b.WriteString("# HELP cozyplane_vpn_connection_tx_bytes_total Bytes sent to the peer over the tunnel.\n")
-		b.WriteString("# TYPE cozyplane_vpn_connection_tx_bytes_total counter\n")
-		for i := range dev.Peers {
-			b.WriteString(fmt.Sprintf("cozyplane_vpn_connection_tx_bytes_total{connection=%q,backend=\"wireguard\"} %d\n",
-				connLabel(names, dev.Peers[i].PublicKey), dev.Peers[i].TransmitBytes))
-		}
-		b.WriteString("# HELP cozyplane_vpn_connection_up Whether the WireGuard peer has handshaked within the last 180 seconds.\n")
-		b.WriteString("# TYPE cozyplane_vpn_connection_up gauge\n")
-		now := time.Now()
-		for i := range dev.Peers {
-			up := 0
-			if !dev.Peers[i].LastHandshakeTime.IsZero() && now.Sub(dev.Peers[i].LastHandshakeTime) <= wireGuardHandshakeTimeout {
-				up = 1
-			}
-			b.WriteString(fmt.Sprintf("cozyplane_vpn_connection_up{connection=%q,backend=\"wireguard\"} %d\n",
-				connLabel(names, dev.Peers[i].PublicKey), up))
-		}
-		b.WriteString("# HELP cozyplane_vpn_connection_last_handshake_timestamp_seconds Unix time of the peer's last handshake (0 if none).\n")
-		b.WriteString("# TYPE cozyplane_vpn_connection_last_handshake_timestamp_seconds gauge\n")
-		for i := range dev.Peers {
-			var ts int64
-			if !dev.Peers[i].LastHandshakeTime.IsZero() {
-				ts = dev.Peers[i].LastHandshakeTime.Unix()
-			}
-			b.WriteString(fmt.Sprintf("cozyplane_vpn_connection_last_handshake_timestamp_seconds{connection=%q,backend=\"wireguard\"} %d\n",
-				connLabel(names, dev.Peers[i].PublicKey), ts))
-		}
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = w.Write([]byte(b.String()))
-	})
-	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
-		dev, err := wg.Device(wgDev)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(wireGuardSnapshot(dev, names, time.Now())); err != nil {
-			log.Warn("encode status", "err", err)
-		}
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := wg.Device(wgDev); err != nil {
-			http.Error(w, "WireGuard device unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := httpserver.New(metricsAddr, mux)
+func serveMetrics(wg *wgctrl.Client, names map[wgtypes.Key]string, log *slog.Logger, checksum string) {
+	srv := httpserver.New(metricsAddr, wireGuardMetricsHandler(func() (*wgtypes.Device, error) { return wg.Device(wgDev) }, names, checksum, log))
 	if err := srv.ListenAndServe(); err != nil {
 		log.Error("metrics server stopped", "err", err)
 	}

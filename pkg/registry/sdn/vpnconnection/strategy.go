@@ -20,10 +20,12 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 
 	"github.com/lllamnyp/cozyplane/api/sdn"
 	"github.com/lllamnyp/cozyplane/internal/vpnidentity"
 	"github.com/lllamnyp/cozyplane/internal/vpnlimits"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -75,12 +77,21 @@ func (vpnConnectionStrategy) NamespaceScoped() bool {
 func (vpnConnectionStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	conn := obj.(*sdn.VPNConnection)
 	conn.Status = sdn.VPNConnectionStatus{}
+	if wireGuardClientMode(conn) || conn.Spec.IPsec != nil {
+		conn.Generation = 1
+	}
 }
 
 func (vpnConnectionStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newConn := obj.(*sdn.VPNConnection)
 	oldConn := old.(*sdn.VPNConnection)
 	newConn.Status = oldConn.Status
+	if wireGuardClientMode(newConn) || wireGuardClientMode(oldConn) || newConn.Spec.IPsec != nil || oldConn.Spec.IPsec != nil {
+		newConn.Generation = oldConn.Generation
+		if !apiequality.Semantic.DeepEqual(newConn.Spec, oldConn.Spec) {
+			newConn.Generation++
+		}
+	}
 }
 
 func (vpnConnectionStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
@@ -104,7 +115,36 @@ func (vpnConnectionStrategy) Canonicalize(obj runtime.Object) {
 }
 
 func (vpnConnectionStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return validateVPNConnection(obj.(*sdn.VPNConnection))
+	conn, previous := obj.(*sdn.VPNConnection), old.(*sdn.VPNConnection)
+	if wireGuardClientMode(previous) && apiequality.Semantic.DeepEqual(conn.Spec, previous.Spec) {
+		return nil
+	}
+	if errs := validateVPNConnection(conn); len(errs) != 0 {
+		return errs
+	}
+	client := func(c *sdn.VPNConnection) *sdn.VPNWireGuardClient {
+		if c.Spec.WireGuard != nil {
+			return c.Spec.WireGuard.Client
+		}
+		return nil
+	}
+	currentClient, oldClient := client(conn), client(previous)
+	if (currentClient == nil) != (oldClient == nil) {
+		return field.ErrorList{field.Forbidden(field.NewPath("spec", "wireguard", "client"), "client mode is immutable; create a new connection")}
+	}
+	if oldClient != nil {
+		if conn.Spec.GatewayRef.Name != previous.Spec.GatewayRef.Name {
+			return field.ErrorList{field.Forbidden(field.NewPath("spec", "gatewayRef"), "client gateway is immutable; create a new connection")}
+		}
+		if !slices.Equal(currentClient.AddressPools, oldClient.AddressPools) {
+			return field.ErrorList{field.Forbidden(field.NewPath("spec", "wireguard", "client", "addressPools"), "client pools are immutable; create a new connection")}
+		}
+	}
+	return nil
+}
+
+func wireGuardClientMode(conn *sdn.VPNConnection) bool {
+	return conn.Spec.WireGuard != nil && conn.Spec.WireGuard.Client != nil
 }
 
 func validateVPNConnection(conn *sdn.VPNConnection) field.ErrorList {
@@ -143,6 +183,21 @@ func validateVPNConnection(conn *sdn.VPNConnection) field.ErrorList {
 		}
 	}
 	if wg := conn.Spec.WireGuard; wg != nil {
+		if client := wg.Client; client != nil {
+			if len(client.VPCRefs) > 10 {
+				return field.ErrorList{field.TooMany(specPath.Child("wireguard", "client", "vpcRefs"), len(client.VPCRefs), 10)}
+			}
+			names := make([]string, len(client.VPCRefs))
+			for i, ref := range client.VPCRefs {
+				names[i] = ref.Name
+			}
+			if problem := vpnlimits.WireGuardClientProblem(vpnlimits.WireGuardPeer{
+				PublicKey: wg.PeerPublicKey, PublicKeys: wg.PeerPublicKeys,
+				Endpoint: wg.PeerEndpoint, Endpoints: wg.PeerEndpoints, Keepalive: int64(wg.PersistentKeepalive),
+			}, client.AddressPools, names, conn.Spec.RemoteCIDRs); problem != "" {
+				return field.ErrorList{field.Invalid(specPath.Child("wireguard", "client"), nil, problem)}
+			}
+		}
 		if problem := vpnlimits.WireGuardPeerProblem(vpnlimits.WireGuardPeer{
 			PublicKey: wg.PeerPublicKey, PublicKeys: wg.PeerPublicKeys,
 			Endpoint: wg.PeerEndpoint, Endpoints: wg.PeerEndpoints, Keepalive: int64(wg.PersistentKeepalive),
@@ -265,6 +320,9 @@ func (vpnConnectionStatusStrategy) PrepareForUpdate(ctx context.Context, obj, ol
 	newConn := obj.(*sdn.VPNConnection)
 	oldConn := old.(*sdn.VPNConnection)
 	newConn.Spec = oldConn.Spec
+	if wireGuardClientMode(oldConn) || oldConn.Spec.IPsec != nil {
+		newConn.Generation = oldConn.Generation
+	}
 }
 
 func (vpnConnectionStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
