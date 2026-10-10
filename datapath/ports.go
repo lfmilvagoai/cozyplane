@@ -28,6 +28,9 @@ import (
 // Used by the CNI plugin via the pinned map. Every pod sets this (0 for the
 // default/system network) so a reused ifindex never inherits a stale id.
 func SetPortNet(ifindex int, netID uint32) error {
+	if _, err := Ifindex(ifindex); err != nil {
+		return err
+	}
 	return withBridgeLock(func() error { return setPortNet(ifindex, netID) })
 }
 
