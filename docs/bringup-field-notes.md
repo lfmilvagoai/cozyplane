@@ -551,3 +551,115 @@ unconditional, which defeats the constant-folding that kept it cheap and
 produces a hotspot that does not exist. And `llvm-objdump` prints BPF jump
 offsets in decimal, so a `readelf` symbol size (hex, for a large program) and a
 disassembly offset are not the same units.
+
+## 13. kpr's Service reconciler dialed a VIP it is itself responsible for (FIXED)
+
+A stand was parked and woken by the TTL automation. Every `cozyplane-kpr` pod
+came up, attached its socket-LB programs, and ~30 s later logged:
+
+```
+svc_vips reconciler exited err="get own node node0: Get \"https://10.96.0.1:443/api/v1/nodes/node0\":
+  dial tcp 10.96.0.1:443: i/o timeout"
+```
+
+The pod then stayed **Running and Ready for 25 hours with nothing reconciling**.
+No Service change reached the datapath in that window: the root ingress Service's
+node-owned externalIPs were refused on every node, including the two with a Ready
+ingress pod, and pods created after the wake were never added as backends. A
+`rollout restart` fixed it instantly, which is the signature of a dead worker
+rather than a bad input.
+
+Two defects, one symptom.
+
+**The address.** `10.96.0.1` is `kubernetes.default`'s ClusterIP — a VIP that,
+with kube-proxy gone, *kpr itself programs*. The reconciler called
+`rest.InClusterConfig()` unconditionally, so it dialed the one address it is
+responsible for serving, during the seconds before it had served it. The chart
+already has `apiServerURL` for exactly this, and `values-talos.yaml` already
+points it at KubePrism (`https://localhost:7445`) — but that value reached only
+Cilium's hive, via `--k8s-api-server-urls`. cozyplane's own net-0 reconciler never
+read the flag. It does now, parsed the way Cilium parses it (a bare `host:port`
+means https), keeping the in-cluster CA and token.
+
+**The exit.** The reconciler ran as `go func() { if err := run(); err != nil
+{ log } }()`. One transient error ended it for the lifetime of the process, and
+nothing downgraded the pod: no probe, no restart, no non-zero exit. It now runs
+under `runWithRestart` — capped exponential backoff, reset once a run has been up
+a while, stopping only when the context is done. Every stage it owns was already
+idempotent (the pin waits retry in a loop; `seed()` is a full pass that sweeps
+leftovers), so re-running it *is* the recovery path.
+
+**What to take from this.** A goroutine whose death is invisible is worse than a
+crash. A crash gets a restart and a `RESTARTS` column; this got a single ERROR
+line in a log nobody reads while the pod advertised itself as healthy. Either
+supervise a long-runner or let its failure reach the kubelet — logging it and
+returning is the one option that cannot recover. Same class as the apiserver
+registration that ran only at startup (§ "the APIService was registered once").
+## 14. Eight pods lost their FabricIP and went unreachable from other nodes (FIXED)
+
+Reported from the integration stand. After a build roll, eight long-lived pods —
+seven of them on one node, all started right after a node reboot two weeks
+earlier — had **no `FabricIP` object**, while 196 of the other 199 pod-network
+pods did.
+
+`remotes` is keyed per address and fed from those objects, so those eight were
+reachable **only from their own node**. From anywhere else their pod IPs and the
+ClusterIPs in front of them timed out, while pods created later on the same node
+were reachable from everywhere. The visible failure was two layers up: the
+admission webhooks behind them (`vcoreprovider.kb.io`,
+`vmpodscrapes.operator.victoriametrics.com`) timed out, and the Helm upgrades of
+capi-providers, linstor and everything downstream failed. Deleting the eight pods
+fixed it, because a new sandbox means a new ADD and a new claim.
+
+Note the shape of this: **no symptom on the affected node.** The pod is Running
+and Ready, its probes pass (kubelet is node-local), its own node's traffic works.
+Nothing in cozyplane reported it, and nothing re-created the claim, because CNI
+ADD is the only thing that ever wrote one and ADD had finished weeks before.
+
+**The fix is to stop treating the claim as a side effect of ADD.** The agent now
+runs a heal pass on startup and every minute: list this node's pods (one
+field-selected List, no second informer — see §8 on the agent's memory), and for
+every address a pod already holds with no claim object, re-create the claim CNI
+ADD would have written. It cannot race the allocator, because a pod has no
+`status.podIP` until the claim that chose that address succeeded; and a claim held
+by a *different* pod's UID is reported, never overwritten, since the agent cannot
+tell which of the two is the honest holder and deleting either would strand a
+running pod. `cozyplane_fabric_ips_missing` is the gauge to alert on — non-zero
+means exactly this outage, minutes in rather than via webhook timeouts.
+
+**How they went missing is still unknown, and one tempting answer is wrong.** The
+controller's GC reclaims a claim when the claiming pod reads back `NotFound`, and
+it reads through `mgr.GetClient()` — the manager's *cached* client. So "a stale
+cache reported `NotFound` for a running pod" looks like the answer. It is not,
+and the reasoning is worth keeping so nobody spends the afternoon on it again:
+
+- An unstarted cache returns `ErrCacheNotStarted`, not `NotFound`, so the GC
+  returns an error and requeues rather than deleting.
+- An informer created lazily by the read **blocks until it has synced**, and
+  returns a `TimeoutError` if that fails — again not `NotFound`
+  (`controller-runtime/pkg/cache/internal/informers.go`, whose comment says
+  exactly why: "so that folks don't read from a stale cache").
+- A synced informer does not transiently lose an object that exists
+  continuously: a relist goes through `DeltaFIFO.Replace`, which computes
+  deletions, rather than emptying the store first.
+
+And the pods in question had been running — and in that cache — for two weeks.
+
+Reaching for `mgr.GetAPIReader()` to "confirm" the absence was tried and
+reverted. It is the pattern the controller-runtime FAQ steers away from: an
+uncached read does not close a staleness race, it only narrows the window (the
+pod can be deleted the instant after the read returns), while putting a
+sequential API-server round trip in front of every reclaim. The FAQ's answer to
+"my cache might be stale" is to assume information is eventually correct and to
+make each reconcile enforce the whole desired state.
+
+Which is what the heal pass above actually is. With it, a claim deleted by
+anything — this GC, an operator, a future bug — is restored within a minute,
+without anyone having to know which. That is the level-based repair the FAQ asks
+for, and it is a better answer than a confirmation read precisely because it does
+not depend on having identified the culprit.
+
+**What to take from this.** Reachability state that is written once, by a
+short-lived process, at an event nobody will see again, has no repair path. Either
+something owns it as derived state and re-derives it, or its loss is permanent and
+silent. Ask of any such record: what re-creates this if it vanishes at 3am?

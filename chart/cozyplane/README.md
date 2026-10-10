@@ -48,8 +48,13 @@ most likely to set:
 - `image` — the cozyplane container image (digest-pinned by the release
   pipeline).
 - `mtu` — pod MTU (underlay MTU minus ~50 bytes of Geneve overhead).
+- `writeCNIConf` — defaults to true for standalone installations. Set false
+  when the platform owns a Multus/Cilium chain; no conflist is created or changed.
 - `cniConfName` — the CNI conflist filename; use a low prefix such as
   `00-cozyplane.conflist` to sort ahead of a co-installed CNI (e.g. Cilium).
+- `cniConfEnabled` controls whether the agent writes that standalone conflist
+  (default `true`). Set it to `false` when the platform supplies a chained
+  conflist, so exactly one component owns CNI configuration.
 - `genevePort` — override only to avoid a clash with another overlay on 6081.
 - `exportPolicy.enabled` — the VPCBinding export admission gate (needs k8s 1.30+).
 - `crds.enabled` — the `local.sdn.cozystack.io` CRDs (default true; disable
@@ -72,3 +77,42 @@ most likely to set:
 - RBAC for both components, the aggregated tenant roles (`cozyplane-tenant-edit` /
   `-view`, docs/multitenancy.md), and the export
   ValidatingAdmissionPolicy.
+- `cozyplane-metrics-reader` (ClusterRole): the permission the agents' `/metrics`
+  authorization checks for. Nothing is bound to it by this chart — see below.
+
+## Upgrading
+
+**The agent's `/metrics` is authenticated and single-homed from this version on,
+and both halves can take an existing scrape away silently.**
+
+- `agent.metricsSecure` defaults to `true`, so a scrape must present a
+  ServiceAccount token whose subject holds `get` on nonResourceURL `/metrics`.
+  The chart ships `cozyplane-metrics-reader` for that, but **binds it to
+  nobody** — the monitoring stack's ServiceAccount lives outside this chart. Until
+  something binds it, a previously anonymous scrape gets `401`, and the per-VPC
+  counters simply vanish from dashboards. Create the binding as part of the
+  upgrade:
+
+  ```bash
+  kubectl create clusterrolebinding cozyplane-metrics-reader \
+    --clusterrole=cozyplane-metrics-reader \
+    --serviceaccount=<monitoring-namespace>:<monitoring-serviceaccount>
+  ```
+
+  `agent.metricsSecure=false` restores the old anonymous endpoint. On a node with
+  a public address that serves the counters to anything that can reach it, which
+  is what the default exists to stop.
+
+- `agent.metricsBindAddress` defaults to the node's primary InternalIP rather
+  than every address, so anything that scraped a *secondary* node address stops
+  resolving. On an IPv6-primary cluster the default still works (the agent
+  brackets the address itself), but only the primary family is served: a probe or
+  scrape against the other family's node address finds nothing listening. Set
+  `agent.metricsBindAddress=":9411"` to listen on every address as before —
+  `test/policy-e2e.sh` needs that to exercise its v6 pod→node gate rather than
+  skip it.
+
+Managed VPN appliances use privileged compatibility mode by default. On nodes
+whose kubelet admits the forwarding sysctls, set `vpn.hardenedAppliance=true` to
+drop privileged mode and retain only `NET_ADMIN`, `NET_RAW`, and
+`NET_BIND_SERVICE`.

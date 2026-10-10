@@ -14,6 +14,9 @@ import (
 
 	"github.com/cilium/ebpf"
 
+	"net/url"
+
+	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -164,10 +167,54 @@ type vipReconciler struct {
 // write the same keys (this owns net 0, socket-LB uses Cilium's own maps).
 // nodeName (the node this kpr instance runs on) scopes LB-ingress rows;
 // clusterDSR is the strictly-opt-in etp: Cluster DSR gate.
+// apiServerHost returns the first --k8s-api-server-urls entry in rest.Config
+// Host form, or "" when the flag is absent or empty. Mirrors Cilium's own
+// parsing of that flag: a bare host:port means https. Cilium rotates over the
+// whole list; one endpoint is all this reconciler needs.
+func apiServerHost(fs *pflag.FlagSet) (string, error) {
+	if fs == nil || fs.Lookup(flagAPIServerURLs) == nil {
+		return "", nil
+	}
+	urls, err := fs.GetStringSlice(flagAPIServerURLs)
+	if err != nil {
+		return "", err
+	}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			u = "https://" + u
+		}
+		parsed, err := url.Parse(u)
+		if err != nil {
+			return "", fmt.Errorf("parse %q: %w", u, err)
+		}
+		return parsed.String(), nil
+	}
+	return "", nil
+}
+
+// The flag daemonk8s registers for the apiserver endpoints; chart/cozyplane-kpr
+// sets it from apiServerURL.
+const flagAPIServerURLs = "k8s-api-server-urls"
+
 func runServiceVIPs(ctx context.Context, pinDir, nodeName string, clusterDSR bool, serviceProxyName string, logger *slog.Logger) error {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return fmt.Errorf("in-cluster config: %w", err)
+	}
+	// Use the endpoint the hive was given rather than the one in the environment.
+	// InClusterConfig points at the kubernetes.default ClusterIP, and with
+	// kube-proxy gone that VIP is unserved until kpr itself programs it — so this
+	// reconciler was dialling an address it is itself responsible for serving,
+	// and died on the timeout during boot. apiServerURL exists precisely to name
+	// a real endpoint (KubePrism on Talos); the hive honoured it and this did not.
+	if host, herr := apiServerHost(pflag.CommandLine); herr != nil {
+		logger.Warn("could not read "+flagAPIServerURLs+"; using the in-cluster endpoint", "err", herr)
+	} else if host != "" {
+		logger.Info("apiserver endpoint", "host", host, "flag", flagAPIServerURLs)
+		cfg.Host = host
 	}
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {

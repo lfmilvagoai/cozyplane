@@ -1,7 +1,11 @@
+# One tenant API distribution per regional cluster. Never switch in-place.
+api:
+  mode: aggregated
+
 # Container image (shared with the cozyplane chart — the apiserver binary lives
 # in the same image). Digest-pinned (no floating tag); keep it equal to
 # chart/cozyplane/values.yaml's pin. See docs/packaging.md.
-image: ghcr.io/lllamnyp/cozyplane@sha256:60111afff00d91883a63183a058d24f81620f250a4526a94dbb26b937bb327e7
+image: ghcr.io/lllamnyp/cozyplane@sha256:55132be06a41a1edf4a57f2120d02996f3c6ffb98ab553f4c1dda581fec257d4
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -54,5 +58,18 @@ etcd:
     requests:
       cpu: 50m
       memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# CRD control-plane phase, after the CNI and cert-manager.
+admission:
+  replicas: 2
+  tls:
+    existingSecret: ""
+    caBundle: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
     limits:
       memory: 256Mi

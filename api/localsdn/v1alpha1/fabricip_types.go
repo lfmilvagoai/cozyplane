@@ -30,6 +30,19 @@ func EscapeIP(ip string) string {
 	return strings.NewReplacer(".", "-", ":", "-").Replace(ip)
 }
 
+// The labels every claim carries. Defined here, not at the writers: CNI ADD and
+// the agent's heal pass both create claims, and a claim one of them cannot find
+// by selector is a claim that leaks. One definition, so the compiler keeps them
+// identical.
+const (
+	// LabelFabricPodUID is the claiming pod's UID (stable across name reuse).
+	LabelFabricPodUID = "local.sdn.cozystack.io/pod-uid"
+	// LabelFabricPodNamespace is the claiming pod's namespace.
+	LabelFabricPodNamespace = "local.sdn.cozystack.io/pod-namespace"
+	// LabelFabricNode is the node the claiming pod is scheduled to.
+	LabelFabricNode = "local.sdn.cozystack.io/node"
+)
+
 // FabricIPName is the claim name of the underlay address `ip`. The NAME is the
 // claim: creating it is the allocation, and the API server's name uniqueness is
 // what makes it atomic cluster-wide. No lock file, no per-node range, no
@@ -52,14 +65,22 @@ type FabricIPSpec struct {
 	Node string `json:"node,omitempty"`
 
 	// PodNamespace, PodName and PodUID identify the claimant. The UID is the
-	// load-bearing one: GC keys on it, so a pod that reuses a name can never
-	// have its address reaped by the previous occupant's DEL.
+	// identity used by GC, so a pod that reuses a name cannot keep the previous
+	// occupant's claims alive. DEL uses the sandbox identity below.
 	// +optional
 	PodNamespace string `json:"podNamespace,omitempty"`
 	// +optional
 	PodName string `json:"podName,omitempty"`
 	// +optional
 	PodUID string `json:"podUID,omitempty"`
+
+	// ContainerID and IfName identify the CNI sandbox allocation. Pod UID alone
+	// is insufficient: a pod can replace its sandbox without changing its UID.
+	// Empty ContainerID denotes a legacy or repaired claim, never released by DEL.
+	// +optional
+	ContainerID string `json:"containerID,omitempty"`
+	// +optional
+	IfName string `json:"ifName,omitempty"`
 }
 
 // +genclient
